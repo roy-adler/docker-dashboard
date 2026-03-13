@@ -13,6 +13,13 @@ Simple Docker dashboard app that talks directly to the Docker daemon.
 ## Run with Docker Compose
 
 ```bash
+DASHBOARD_PASSWORD="your-strong-password" docker compose up --build
+```
+
+Or put it in a `.env` file:
+
+```bash
+DASHBOARD_PASSWORD=your-strong-password
 docker compose up --build
 ```
 
@@ -22,7 +29,7 @@ Open: [http://localhost:3000](http://localhost:3000)
 
 ```bash
 npm install
-npm start
+DASHBOARD_PASSWORD=your-strong-password AUTH_SESSION_TTL_MINUTES=30 npm start
 ```
 
 ## API endpoints

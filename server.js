@@ -1,4 +1,5 @@
 import http from "node:http";
+import crypto from "node:crypto";
 import { URL } from "node:url";
 import express from "express";
 import Docker from "dockerode";
@@ -6,17 +7,137 @@ import { WebSocketServer } from "ws";
 
 const app = express();
 const server = http.createServer(app);
+app.set("trust proxy", 1);
 
 const docker = new Docker({
   socketPath: process.env.DOCKER_SOCKET || "/var/run/docker.sock"
 });
 
 app.use(express.json());
-app.use(express.static("public"));
+app.use(express.urlencoded({ extended: false }));
+
+const dashboardPassword = process.env.DASHBOARD_PASSWORD;
+if (!dashboardPassword) {
+  console.error("Missing DASHBOARD_PASSWORD environment variable.");
+  process.exit(1);
+}
+
+const sessionCookieName = "dd_session";
+const sessionTtlMinutes = Math.max(1, Number(process.env.AUTH_SESSION_TTL_MINUTES || 30));
+const sessionSecret = process.env.AUTH_SESSION_SECRET || dashboardPassword;
 
 function formatDockerError(error) {
   const message = error?.json?.message || error?.reason || error?.message || "Unknown Docker error";
   return { error: message };
+}
+
+function parseCookies(cookieHeader = "") {
+  return cookieHeader.split(";").reduce((acc, pair) => {
+    const [rawKey, ...rawValue] = pair.trim().split("=");
+    if (!rawKey) {
+      return acc;
+    }
+    acc[rawKey] = decodeURIComponent(rawValue.join("="));
+    return acc;
+  }, {});
+}
+
+function signValue(value) {
+  return crypto.createHmac("sha256", sessionSecret).update(value).digest("hex");
+}
+
+function timingSafeEqual(a, b) {
+  const aBuffer = Buffer.from(a);
+  const bBuffer = Buffer.from(b);
+  if (aBuffer.length !== bBuffer.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(aBuffer, bBuffer);
+}
+
+function createSessionToken() {
+  const expiresAt = Date.now() + sessionTtlMinutes * 60 * 1000;
+  const payload = String(expiresAt);
+  const signature = signValue(payload);
+  return `${payload}.${signature}`;
+}
+
+function isValidSessionToken(token) {
+  if (!token || !token.includes(".")) {
+    return false;
+  }
+  const tokenParts = token.split(".");
+  if (tokenParts.length !== 2) {
+    return false;
+  }
+  const [expiresAtRaw, signature] = tokenParts;
+  const expected = signValue(expiresAtRaw);
+  if (!timingSafeEqual(signature, expected)) {
+    return false;
+  }
+  const expiresAt = Number(expiresAtRaw);
+  return Number.isFinite(expiresAt) && expiresAt > Date.now();
+}
+
+function isAuthenticatedFromCookieHeader(cookieHeader) {
+  const cookies = parseCookies(cookieHeader);
+  return isValidSessionToken(cookies[sessionCookieName]);
+}
+
+function setSessionCookie(res, req) {
+  const token = createSessionToken();
+  const maxAgeSeconds = sessionTtlMinutes * 60;
+  const isSecure =
+    req.secure || String(req.headers["x-forwarded-proto"] || "").toLowerCase() === "https";
+  const parts = [
+    `${sessionCookieName}=${encodeURIComponent(token)}`,
+    `Max-Age=${maxAgeSeconds}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax"
+  ];
+  if (isSecure) {
+    parts.push("Secure");
+  }
+  res.setHeader("Set-Cookie", parts.join("; "));
+}
+
+function clearSessionCookie(res) {
+  res.setHeader(
+    "Set-Cookie",
+    `${sessionCookieName}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax`
+  );
+}
+
+function renderLoginPage(hasError) {
+  const errorHtml = hasError
+    ? '<p style="color:#fca5a5;margin:0 0 12px;">Invalid password</p>'
+    : "";
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Docker Dashboard Login</title>
+    <style>
+      body { margin:0; min-height:100vh; display:grid; place-items:center; background:#0f172a; color:#e2e8f0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+      .card { width:min(92vw,360px); background:#1e293b; border:1px solid #334155; border-radius:10px; padding:18px; }
+      h1 { margin:0 0 12px; font-size:1.1rem; }
+      input, button { width:100%; border-radius:7px; border:1px solid #475569; background:#0f172a; color:#e2e8f0; padding:10px; }
+      button { cursor:pointer; margin-top:10px; background:#0ea5e9; border:none; color:#082f49; font-weight:600; }
+      p { color:#94a3b8; font-size:0.9rem; margin:0 0 12px; }
+    </style>
+  </head>
+  <body>
+    <form class="card" method="POST" action="/auth/login">
+      <h1>Docker Dashboard</h1>
+      <p>Enter dashboard password</p>
+      ${errorHtml}
+      <input type="password" name="password" placeholder="Password" required autofocus />
+      <button type="submit">Sign in</button>
+    </form>
+  </body>
+</html>`;
 }
 
 function normalizeContainer(container) {
@@ -38,6 +159,50 @@ function normalizeContainer(container) {
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
+
+app.get("/login", (req, res) => {
+  if (isAuthenticatedFromCookieHeader(req.headers.cookie)) {
+    res.redirect("/");
+    return;
+  }
+  const hasError = req.query.error === "1";
+  res.type("html").send(renderLoginPage(hasError));
+});
+
+app.post("/auth/login", (req, res) => {
+  const submittedPassword = String(req.body?.password || "");
+  if (!timingSafeEqual(submittedPassword, dashboardPassword)) {
+    res.redirect("/login?error=1");
+    return;
+  }
+  setSessionCookie(res, req);
+  res.redirect("/");
+});
+
+app.post("/auth/logout", (_req, res) => {
+  clearSessionCookie(res);
+  res.status(204).end();
+});
+
+app.use((req, res, next) => {
+  if (req.path === "/login" || req.path === "/auth/login" || req.path === "/api/health") {
+    next();
+    return;
+  }
+
+  if (isAuthenticatedFromCookieHeader(req.headers.cookie)) {
+    next();
+    return;
+  }
+
+  if (req.path.startsWith("/api/")) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  res.redirect("/login");
+});
+
+app.use(express.static("public"));
 
 app.get("/api/system/info", async (_req, res) => {
   try {
@@ -197,6 +362,11 @@ wss.on("connection", async (socket, request) => {
 
 server.on("upgrade", (request, socket, head) => {
   if (!request.url?.startsWith("/ws")) {
+    socket.destroy();
+    return;
+  }
+  if (!isAuthenticatedFromCookieHeader(request.headers.cookie)) {
+    socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
     socket.destroy();
     return;
   }
