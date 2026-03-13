@@ -151,10 +151,28 @@ th {
 }
 
 .ports-cell {
-  max-width: 260px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  max-width: 320px;
+  white-space: normal;
+  line-height: 1.35;
+}
+
+.ports-details {
+  width: 100%;
+}
+
+.ports-summary {
+  cursor: pointer;
+  color: #bfdbfe;
+}
+
+.ports-details[open] .ports-summary {
+  margin-bottom: 4px;
+}
+
+.ports-list {
+  white-space: pre-line;
+  color: var(--muted);
+  font-size: 0.82rem;
 }
 
 button {

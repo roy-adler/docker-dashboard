@@ -61,15 +61,7 @@ function formatPorts(ports) {
   if (!ports || ports.length === 0) {
     return "-";
   }
-  return ports
-    .map((port) => {
-      const privatePort = `${port.PrivatePort}/${port.Type}`;
-      if (port.PublicPort) {
-        return `${port.IP || "0.0.0.0"}:${port.PublicPort} -> ${privatePort}`;
-      }
-      return privatePort;
-    })
-    .join(", ");
+  return ports.map(formatPortEntry).join(", ");
 }
 
 function formatPortsPreview(ports, maxItems = 2) {
@@ -82,15 +74,45 @@ function formatPortsPreview(ports, maxItems = 2) {
   }
   const firstEntries = ports
     .slice(0, maxItems)
-    .map((port) => {
-      const privatePort = `${port.PrivatePort}/${port.Type}`;
-      if (port.PublicPort) {
-        return `${port.IP || "0.0.0.0"}:${port.PublicPort} -> ${privatePort}`;
-      }
-      return privatePort;
-    })
+    .map(formatPortEntry)
     .join(", ");
   return `${firstEntries}, +${ports.length - maxItems} more`;
+}
+
+function formatPortEntry(port) {
+  const privatePort = `${port.PrivatePort}/${port.Type}`;
+  if (port.PublicPort) {
+    return `${port.IP || "0.0.0.0"}:${port.PublicPort} -> ${privatePort}`;
+  }
+  return privatePort;
+}
+
+function renderPortsCell(portsCell, ports) {
+  const entries = (ports || []).map(formatPortEntry);
+  portsCell.innerHTML = "";
+
+  if (entries.length === 0) {
+    portsCell.textContent = "-";
+    return;
+  }
+
+  if (entries.length <= 2) {
+    portsCell.textContent = entries.join(", ");
+    return;
+  }
+
+  const details = document.createElement("details");
+  details.className = "ports-details";
+  const summary = document.createElement("summary");
+  summary.className = "ports-summary";
+  summary.textContent = formatPortsPreview(ports, 2);
+
+  const list = document.createElement("div");
+  list.className = "ports-list";
+  list.textContent = entries.join("\n");
+
+  details.append(summary, list);
+  portsCell.appendChild(details);
 }
 
 async function api(path, options = {}) {
@@ -240,8 +262,7 @@ async function loadContainers() {
         <td class="actions container-actions"></td>
       `;
       const portsCell = row.querySelector(".ports-cell");
-      portsCell.textContent = formatPortsPreview(container.ports, 2);
-      portsCell.title = formatPorts(container.ports);
+      renderPortsCell(portsCell, container.ports);
       const actionsCell = row.querySelector(".actions");
 
       const startBtn = document.createElement("button");
