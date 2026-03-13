@@ -120,10 +120,11 @@ function renderLoginPage(hasError) {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Docker Dashboard Login</title>
     <style>
+      * { box-sizing: border-box; }
       body { margin:0; min-height:100vh; display:grid; place-items:center; background:#0f172a; color:#e2e8f0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
       .card { width:min(92vw,360px); background:#1e293b; border:1px solid #334155; border-radius:10px; padding:18px; }
       h1 { margin:0 0 12px; font-size:1.1rem; }
-      input, button { width:100%; border-radius:7px; border:1px solid #475569; background:#0f172a; color:#e2e8f0; padding:10px; }
+      input, button { display:block; width:100%; border-radius:7px; border:1px solid #475569; background:#0f172a; color:#e2e8f0; padding:10px; }
       button { cursor:pointer; margin-top:10px; background:#0ea5e9; border:none; color:#082f49; font-weight:600; }
       p { color:#94a3b8; font-size:0.9rem; margin:0 0 12px; }
     </style>
