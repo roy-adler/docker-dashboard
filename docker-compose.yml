@@ -1,0 +1,12 @@
+services:
+  dashboard:
+    build: .
+    container_name: docker-dashboard
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - DOCKER_SOCKET=/var/run/docker.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped

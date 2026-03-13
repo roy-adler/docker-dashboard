@@ -1,0 +1,14 @@
+{
+  "name": "docker-dashboard",
+  "version": "0.1.0",
+  "description": "Docker dashboard that talks to Docker daemon",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "dockerode": "^4.0.9",
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  }
+}
