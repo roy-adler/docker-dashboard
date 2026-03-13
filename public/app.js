@@ -72,6 +72,27 @@ function formatPorts(ports) {
     .join(", ");
 }
 
+function formatPortsPreview(ports, maxItems = 2) {
+  if (!ports || ports.length === 0) {
+    return "-";
+  }
+  const fullText = formatPorts(ports);
+  if (ports.length <= maxItems) {
+    return fullText;
+  }
+  const firstEntries = ports
+    .slice(0, maxItems)
+    .map((port) => {
+      const privatePort = `${port.PrivatePort}/${port.Type}`;
+      if (port.PublicPort) {
+        return `${port.IP || "0.0.0.0"}:${port.PublicPort} -> ${privatePort}`;
+      }
+      return privatePort;
+    })
+    .join(", ");
+  return `${firstEntries}, +${ports.length - maxItems} more`;
+}
+
 async function api(path, options = {}) {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json" },
@@ -215,9 +236,12 @@ async function loadContainers() {
         <td>${container.image}</td>
         <td>${container.state}</td>
         <td>${container.status}</td>
-        <td>${formatPorts(container.ports)}</td>
-        <td class="actions"></td>
+        <td class="ports-cell"></td>
+        <td class="actions container-actions"></td>
       `;
+      const portsCell = row.querySelector(".ports-cell");
+      portsCell.textContent = formatPortsPreview(container.ports, 2);
+      portsCell.title = formatPorts(container.ports);
       const actionsCell = row.querySelector(".actions");
 
       const startBtn = document.createElement("button");
