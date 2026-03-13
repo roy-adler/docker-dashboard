@@ -111,6 +111,36 @@ async function runContainerAction(containerId, action) {
   }
 }
 
+async function removeContainer(container, force = false) {
+  const name = container.names[0] || container.shortId;
+  const confirmationText = force
+    ? `Force delete container "${name}"? This will stop and remove it.`
+    : `Delete container "${name}" from Docker?`;
+  if (!window.confirm(confirmationText)) {
+    return;
+  }
+
+  try {
+    await api(`/api/containers/${encodeURIComponent(container.id)}?force=${force ? "true" : "false"}`, {
+      method: "DELETE"
+    });
+    await loadContainers();
+    await loadPerformance();
+    await loadImages();
+  } catch (error) {
+    if (!force) {
+      const tryForce = window.confirm(
+        `Delete failed: ${error.message}\n\nTry force delete instead?`
+      );
+      if (tryForce) {
+        await removeContainer(container, true);
+      }
+      return;
+    }
+    alert(`Failed to delete container: ${error.message}`);
+  }
+}
+
 async function removeImage(image, force = false) {
   const name = image.tags[0] || image.shortId;
   const confirmationText = force
@@ -206,7 +236,12 @@ async function loadContainers() {
       logsBtn.textContent = "Logs";
       logsBtn.onclick = () => openLogs(container);
 
-      actionsCell.append(startBtn, stopBtn, restartBtn, logsBtn);
+      const deleteBtn = document.createElement("button");
+      deleteBtn.textContent = "Delete";
+      deleteBtn.className = "button-danger";
+      deleteBtn.onclick = () => removeContainer(container);
+
+      actionsCell.append(startBtn, stopBtn, restartBtn, logsBtn, deleteBtn);
       containersBody.appendChild(row);
     });
   } catch (error) {

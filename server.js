@@ -381,6 +381,17 @@ app.post("/api/containers/:id/restart", async (req, res) => {
   }
 });
 
+app.delete("/api/containers/:id", async (req, res) => {
+  try {
+    const forceQuery = String(req.query.force || "").toLowerCase();
+    const force = forceQuery === "1" || forceQuery === "true" || forceQuery === "yes";
+    await docker.getContainer(req.params.id).remove({ force });
+    res.json({ ok: true, force });
+  } catch (error) {
+    res.status(500).json(formatDockerError(error));
+  }
+});
+
 app.get("/api/containers/:id/logs", async (req, res) => {
   try {
     const tail = Number(req.query.tail || 300);
