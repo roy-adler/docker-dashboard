@@ -1,6 +1,8 @@
 const containersBody = document.querySelector("#containers-body");
 const systemInfo = document.querySelector("#system-info");
 const eventsLog = document.querySelector("#events-log");
+const hostPerformance = document.querySelector("#host-performance");
+const containerPerformanceBody = document.querySelector("#container-performance-body");
 const containerLogs = document.querySelector("#container-logs");
 const logsTarget = document.querySelector("#logs-target");
 const refreshBtn = document.querySelector("#refresh-btn");
@@ -13,6 +15,29 @@ let logsSocket = null;
 
 function setSystemInfoText(text) {
   systemInfo.textContent = text;
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (!Number.isFinite(value) || value <= 0) {
+    return "0 B";
+  }
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1);
+  const sized = value / 1024 ** index;
+  return `${sized >= 10 || index === 0 ? sized.toFixed(0) : sized.toFixed(1)} ${units[index]}`;
+}
+
+function formatPercent(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) {
+    return "0.0%";
+  }
+  return `${number.toFixed(1)}%`;
+}
+
+function formatRate(value) {
+  return `${formatBytes(value)}/s`;
 }
 
 function appendLog(target, line, maxLines = 500) {
@@ -71,6 +96,7 @@ async function runContainerAction(containerId, action) {
       method: "POST"
     });
     await loadContainers();
+    await loadPerformance();
   } catch (error) {
     alert(`Failed to ${action}: ${error.message}`);
   }
@@ -149,6 +175,70 @@ async function loadContainers() {
   }
 }
 
+function renderHostPerformance(host) {
+  hostPerformance.innerHTML = `
+    <div class="metric-box">
+      <div class="metric-label">CPU Usage</div>
+      <div class="metric-value">${formatPercent(host.cpuPercent)}</div>
+    </div>
+    <div class="metric-box">
+      <div class="metric-label">RAM Usage</div>
+      <div class="metric-value">${formatPercent(host.memoryPercent)} (${formatBytes(host.memoryUsed)} / ${formatBytes(host.memoryTotal)})</div>
+    </div>
+    <div class="metric-box">
+      <div class="metric-label">Network/s</div>
+      <div class="metric-value">RX ${formatRate(host.network.rxRate)} | TX ${formatRate(host.network.txRate)}</div>
+    </div>
+    <div class="metric-box">
+      <div class="metric-label">Disk I/O/s</div>
+      <div class="metric-value">R ${formatRate(host.disk.readRate)} | W ${formatRate(host.disk.writeRate)}</div>
+    </div>
+  `;
+}
+
+async function loadPerformance() {
+  try {
+    const payload = await api("/api/metrics");
+    renderHostPerformance(payload.host);
+
+    if (payload.containers.length === 0) {
+      containerPerformanceBody.innerHTML = '<tr><td colspan="6">No containers found.</td></tr>';
+      return;
+    }
+
+    containerPerformanceBody.innerHTML = "";
+    payload.containers.forEach((container) => {
+      const row = document.createElement("tr");
+      const metrics = container.metrics;
+      if (!metrics) {
+        row.innerHTML = `
+          <td>${container.name}</td>
+          <td>-</td>
+          <td>-</td>
+          <td>-</td>
+          <td>-</td>
+          <td>-</td>
+        `;
+        containerPerformanceBody.appendChild(row);
+        return;
+      }
+
+      row.innerHTML = `
+        <td>${container.name}</td>
+        <td>${formatPercent(metrics.cpuPercent)}</td>
+        <td>${formatPercent(metrics.memoryPercent)} (${formatBytes(metrics.memoryUsage)})</td>
+        <td>${formatBytes(metrics.network.rxBytes)} / ${formatBytes(metrics.network.txBytes)}</td>
+        <td>${formatRate(metrics.network.rxRate)} / ${formatRate(metrics.network.txRate)}</td>
+        <td>${formatBytes(metrics.disk.readBytes)} / ${formatBytes(metrics.disk.writeBytes)}</td>
+      `;
+      containerPerformanceBody.appendChild(row);
+    });
+  } catch (error) {
+    hostPerformance.textContent = `Error: ${error.message}`;
+    containerPerformanceBody.innerHTML = `<tr><td colspan="6">Error: ${error.message}</td></tr>`;
+  }
+}
+
 function connectEvents() {
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
   eventsSocket = new WebSocket(`${protocol}://${window.location.host}/ws?mode=events`);
@@ -184,6 +274,7 @@ function setAutoRefresh(enabled) {
     refreshTimer = setInterval(() => {
       loadContainers();
       loadSystemInfo();
+      loadPerformance();
     }, 5000);
   }
 }
@@ -191,6 +282,7 @@ function setAutoRefresh(enabled) {
 refreshBtn.addEventListener("click", () => {
   loadContainers();
   loadSystemInfo();
+  loadPerformance();
 });
 
 autoRefreshCheckbox.addEventListener("change", () => {
@@ -207,5 +299,6 @@ closeLogsBtn.addEventListener("click", () => {
 
 loadContainers();
 loadSystemInfo();
+loadPerformance();
 setAutoRefresh(true);
 connectEvents();

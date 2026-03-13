@@ -73,8 +73,43 @@ h2 {
   gap: 14px;
 }
 
+.side-cards {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
 .table-wrap {
   overflow: auto;
+}
+
+.compact-table-wrap {
+  max-height: 420px;
+}
+
+.host-performance {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.metric-box {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  background: #182538;
+}
+
+.metric-label {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.metric-value {
+  font-size: 0.95rem;
+  margin-top: 4px;
+  font-weight: 600;
 }
 
 table {
@@ -141,6 +176,11 @@ button:hover {
   overflow: auto;
   font-size: 0.82rem;
   line-height: 1.45;
+}
+
+#events-log {
+  min-height: 220px;
+  max-height: 300px;
 }
 
 @media (max-width: 1100px) {

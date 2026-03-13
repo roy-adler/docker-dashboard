@@ -1,5 +1,6 @@
 import http from "node:http";
 import crypto from "node:crypto";
+import os from "node:os";
 import { URL } from "node:url";
 import express from "express";
 import Docker from "dockerode";
@@ -25,6 +26,9 @@ if (!dashboardPassword) {
 const sessionCookieName = "dd_session";
 const sessionTtlMinutes = Math.max(1, Number(process.env.AUTH_SESSION_TTL_MINUTES || 30));
 const sessionSecret = process.env.AUTH_SESSION_SECRET || dashboardPassword;
+const previousContainerSamples = new Map();
+let previousAggregateSample = null;
+let previousHostCpuTimes = null;
 
 function formatDockerError(error) {
   const message = error?.json?.message || error?.reason || error?.message || "Unknown Docker error";
@@ -157,6 +161,110 @@ function normalizeContainer(container) {
   };
 }
 
+function sumNetworkBytes(networks = {}) {
+  return Object.values(networks).reduce(
+    (acc, net) => {
+      acc.rx += Number(net?.rx_bytes || 0);
+      acc.tx += Number(net?.tx_bytes || 0);
+      return acc;
+    },
+    { rx: 0, tx: 0 }
+  );
+}
+
+function sumBlockIoBytes(blkioStats = {}) {
+  const ioStats = blkioStats?.io_service_bytes_recursive || [];
+  return ioStats.reduce(
+    (acc, entry) => {
+      const op = String(entry?.op || "").toLowerCase();
+      const value = Number(entry?.value || 0);
+      if (op === "read") {
+        acc.read += value;
+      } else if (op === "write") {
+        acc.write += value;
+      }
+      return acc;
+    },
+    { read: 0, write: 0 }
+  );
+}
+
+function calculateRate(currentValue, previousValue, elapsedMs) {
+  if (!Number.isFinite(currentValue) || !Number.isFinite(previousValue) || elapsedMs <= 0) {
+    return 0;
+  }
+  const diff = currentValue - previousValue;
+  return diff > 0 ? (diff * 1000) / elapsedMs : 0;
+}
+
+function getHostCpuPercent() {
+  const cpus = os.cpus();
+  const current = cpus.map((cpu) => cpu.times);
+  if (!previousHostCpuTimes || previousHostCpuTimes.length !== current.length) {
+    previousHostCpuTimes = current;
+    return 0;
+  }
+
+  let idleDelta = 0;
+  let totalDelta = 0;
+  for (let index = 0; index < current.length; index += 1) {
+    const previous = previousHostCpuTimes[index];
+    const now = current[index];
+    const previousTotal = previous.user + previous.nice + previous.sys + previous.idle + previous.irq;
+    const nowTotal = now.user + now.nice + now.sys + now.idle + now.irq;
+    totalDelta += nowTotal - previousTotal;
+    idleDelta += now.idle - previous.idle;
+  }
+  previousHostCpuTimes = current;
+
+  if (totalDelta <= 0) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, (1 - idleDelta / totalDelta) * 100));
+}
+
+function parseContainerStats(stats, previousSample, nowMs) {
+  const cpuDelta =
+    Number(stats?.cpu_stats?.cpu_usage?.total_usage || 0) -
+    Number(stats?.precpu_stats?.cpu_usage?.total_usage || 0);
+  const systemDelta =
+    Number(stats?.cpu_stats?.system_cpu_usage || 0) -
+    Number(stats?.precpu_stats?.system_cpu_usage || 0);
+  const cpuCount =
+    Number(stats?.cpu_stats?.online_cpus || 0) ||
+    stats?.cpu_stats?.cpu_usage?.percpu_usage?.length ||
+    1;
+  const cpuPercent =
+    systemDelta > 0 && cpuDelta > 0 ? Math.max(0, (cpuDelta / systemDelta) * cpuCount * 100) : 0;
+
+  const memoryUsage = Number(stats?.memory_stats?.usage || 0);
+  const memoryLimit = Number(stats?.memory_stats?.limit || 0);
+  const memoryPercent = memoryLimit > 0 ? (memoryUsage / memoryLimit) * 100 : 0;
+
+  const network = sumNetworkBytes(stats?.networks || {});
+  const disk = sumBlockIoBytes(stats?.blkio_stats || {});
+
+  const elapsedMs = previousSample ? nowMs - previousSample.timestamp : 0;
+  return {
+    cpuPercent,
+    memoryUsage,
+    memoryLimit,
+    memoryPercent,
+    network: {
+      rxBytes: network.rx,
+      txBytes: network.tx,
+      rxRate: calculateRate(network.rx, previousSample?.networkRx, elapsedMs),
+      txRate: calculateRate(network.tx, previousSample?.networkTx, elapsedMs)
+    },
+    disk: {
+      readBytes: disk.read,
+      writeBytes: disk.write,
+      readRate: calculateRate(disk.read, previousSample?.diskRead, elapsedMs),
+      writeRate: calculateRate(disk.write, previousSample?.diskWrite, elapsedMs)
+    }
+  };
+}
+
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
@@ -271,6 +379,100 @@ app.get("/api/containers/:id/logs", async (req, res) => {
       tail: Number.isNaN(tail) ? 300 : tail
     });
     res.type("text/plain").send(logsStream.toString("utf8"));
+  } catch (error) {
+    res.status(500).json(formatDockerError(error));
+  }
+});
+
+app.get("/api/metrics", async (_req, res) => {
+  try {
+    const nowMs = Date.now();
+    const containers = await docker.listContainers({ all: true });
+
+    const activeIds = new Set(containers.map((container) => container.Id));
+    for (const id of previousContainerSamples.keys()) {
+      if (!activeIds.has(id)) {
+        previousContainerSamples.delete(id);
+      }
+    }
+
+    const containerMetrics = await Promise.all(
+      containers.map(async (container) => {
+        const name = (container.Names?.[0] || container.Id.slice(0, 12)).replace(/^\//, "");
+        if (container.State !== "running") {
+          return {
+            id: container.Id,
+            name,
+            state: container.State,
+            metrics: null
+          };
+        }
+
+        const stats = await docker.getContainer(container.Id).stats({ stream: false });
+        const previousSample = previousContainerSamples.get(container.Id);
+        const metrics = parseContainerStats(stats, previousSample, nowMs);
+        previousContainerSamples.set(container.Id, {
+          timestamp: nowMs,
+          networkRx: metrics.network.rxBytes,
+          networkTx: metrics.network.txBytes,
+          diskRead: metrics.disk.readBytes,
+          diskWrite: metrics.disk.writeBytes
+        });
+
+        return {
+          id: container.Id,
+          name,
+          state: container.State,
+          metrics
+        };
+      })
+    );
+
+    const aggregate = containerMetrics.reduce(
+      (acc, container) => {
+        if (!container.metrics) {
+          return acc;
+        }
+        acc.rx += container.metrics.network.rxBytes;
+        acc.tx += container.metrics.network.txBytes;
+        acc.read += container.metrics.disk.readBytes;
+        acc.write += container.metrics.disk.writeBytes;
+        return acc;
+      },
+      { rx: 0, tx: 0, read: 0, write: 0 }
+    );
+
+    const hostMemoryTotal = os.totalmem();
+    const hostMemoryUsed = hostMemoryTotal - os.freemem();
+    const elapsedMs = previousAggregateSample ? nowMs - previousAggregateSample.timestamp : 0;
+    const host = {
+      cpuPercent: getHostCpuPercent(),
+      memoryTotal: hostMemoryTotal,
+      memoryUsed: hostMemoryUsed,
+      memoryPercent: hostMemoryTotal > 0 ? (hostMemoryUsed / hostMemoryTotal) * 100 : 0,
+      network: {
+        rxBytes: aggregate.rx,
+        txBytes: aggregate.tx,
+        rxRate: calculateRate(aggregate.rx, previousAggregateSample?.rx, elapsedMs),
+        txRate: calculateRate(aggregate.tx, previousAggregateSample?.tx, elapsedMs)
+      },
+      disk: {
+        readBytes: aggregate.read,
+        writeBytes: aggregate.write,
+        readRate: calculateRate(aggregate.read, previousAggregateSample?.read, elapsedMs),
+        writeRate: calculateRate(aggregate.write, previousAggregateSample?.write, elapsedMs)
+      }
+    };
+
+    previousAggregateSample = {
+      timestamp: nowMs,
+      ...aggregate
+    };
+
+    res.json({
+      host,
+      containers: containerMetrics
+    });
   } catch (error) {
     res.status(500).json(formatDockerError(error));
   }

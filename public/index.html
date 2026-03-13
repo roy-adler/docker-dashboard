@@ -47,10 +47,36 @@
         </div>
       </article>
 
-      <article class="card">
-        <h2>Events</h2>
-        <pre id="events-log" class="log-view"></pre>
-      </article>
+      <div class="side-cards">
+        <article class="card">
+          <h2>Events</h2>
+          <pre id="events-log" class="log-view"></pre>
+        </article>
+
+        <article class="card">
+          <h2>Performance</h2>
+          <div id="host-performance" class="host-performance">Loading host metrics...</div>
+          <div class="table-wrap compact-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Container</th>
+                  <th>CPU</th>
+                  <th>RAM</th>
+                  <th>Net RX/TX</th>
+                  <th>Net/s</th>
+                  <th>Disk R/W</th>
+                </tr>
+              </thead>
+              <tbody id="container-performance-body">
+                <tr>
+                  <td colspan="6">Loading container metrics...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </article>
+      </div>
     </section>
 
     <section class="card">
