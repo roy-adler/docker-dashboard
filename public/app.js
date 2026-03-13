@@ -3,6 +3,7 @@ const systemInfo = document.querySelector("#system-info");
 const eventsLog = document.querySelector("#events-log");
 const hostPerformance = document.querySelector("#host-performance");
 const containerPerformanceBody = document.querySelector("#container-performance-body");
+const imagesBody = document.querySelector("#images-body");
 const containerLogs = document.querySelector("#container-logs");
 const logsTarget = document.querySelector("#logs-target");
 const refreshBtn = document.querySelector("#refresh-btn");
@@ -38,6 +39,14 @@ function formatPercent(value) {
 
 function formatRate(value) {
   return `${formatBytes(value)}/s`;
+}
+
+function formatDateTime(unixSeconds) {
+  const value = Number(unixSeconds || 0);
+  if (!Number.isFinite(value) || value <= 0) {
+    return "-";
+  }
+  return new Date(value * 1000).toLocaleString();
 }
 
 function appendLog(target, line, maxLines = 500) {
@@ -99,6 +108,36 @@ async function runContainerAction(containerId, action) {
     await loadPerformance();
   } catch (error) {
     alert(`Failed to ${action}: ${error.message}`);
+  }
+}
+
+async function removeImage(image, force = false) {
+  const name = image.tags[0] || image.shortId;
+  const confirmationText = force
+    ? `Force delete image "${name}"? This may remove it even if other containers depend on it.`
+    : `Delete image "${name}" from Docker?`;
+  if (!window.confirm(confirmationText)) {
+    return;
+  }
+
+  try {
+    await api(`/api/images/${encodeURIComponent(image.id)}?force=${force ? "true" : "false"}`, {
+      method: "DELETE"
+    });
+    await loadImages();
+    await loadContainers();
+    await loadPerformance();
+  } catch (error) {
+    if (!force) {
+      const tryForce = window.confirm(
+        `Delete failed: ${error.message}\n\nTry force delete instead?`
+      );
+      if (tryForce) {
+        await removeImage(image, true);
+      }
+      return;
+    }
+    alert(`Failed to delete image: ${error.message}`);
   }
 }
 
@@ -172,6 +211,39 @@ async function loadContainers() {
     });
   } catch (error) {
     containersBody.innerHTML = `<tr><td colspan="6">Error: ${error.message}</td></tr>`;
+  }
+}
+
+async function loadImages() {
+  try {
+    const images = await api("/api/images");
+    if (images.length === 0) {
+      imagesBody.innerHTML = '<tr><td colspan="6">No images found.</td></tr>';
+      return;
+    }
+
+    imagesBody.innerHTML = "";
+    images.forEach((image) => {
+      const row = document.createElement("tr");
+      row.innerHTML = `
+        <td>${image.tags.join(", ")}</td>
+        <td>${image.shortId}</td>
+        <td>${formatDateTime(image.created)}</td>
+        <td>${formatBytes(image.size)}</td>
+        <td>${image.containers}</td>
+        <td class="actions"></td>
+      `;
+
+      const actionsCell = row.querySelector(".actions");
+      const removeBtn = document.createElement("button");
+      removeBtn.textContent = "Delete";
+      removeBtn.className = "button-danger";
+      removeBtn.onclick = () => removeImage(image);
+      actionsCell.append(removeBtn);
+      imagesBody.appendChild(row);
+    });
+  } catch (error) {
+    imagesBody.innerHTML = `<tr><td colspan="6">Error: ${error.message}</td></tr>`;
   }
 }
 
@@ -273,6 +345,7 @@ function setAutoRefresh(enabled) {
   if (enabled) {
     refreshTimer = setInterval(() => {
       loadContainers();
+      loadImages();
       loadSystemInfo();
       loadPerformance();
     }, 5000);
@@ -281,6 +354,7 @@ function setAutoRefresh(enabled) {
 
 refreshBtn.addEventListener("click", () => {
   loadContainers();
+  loadImages();
   loadSystemInfo();
   loadPerformance();
 });
@@ -298,6 +372,7 @@ closeLogsBtn.addEventListener("click", () => {
 });
 
 loadContainers();
+loadImages();
 loadSystemInfo();
 loadPerformance();
 setAutoRefresh(true);

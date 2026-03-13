@@ -161,6 +161,18 @@ function normalizeContainer(container) {
   };
 }
 
+function normalizeImage(image) {
+  const tags = image.RepoTags && image.RepoTags.length > 0 ? image.RepoTags : ["<none>:<none>"];
+  return {
+    id: image.Id,
+    shortId: String(image.Id || "").replace(/^sha256:/, "").slice(0, 12),
+    tags,
+    created: image.Created,
+    size: image.Size,
+    containers: Number.isFinite(image.Containers) ? image.Containers : 0
+  };
+}
+
 function sumNetworkBytes(networks = {}) {
   return Object.values(networks).reduce(
     (acc, net) => {
@@ -379,6 +391,26 @@ app.get("/api/containers/:id/logs", async (req, res) => {
       tail: Number.isNaN(tail) ? 300 : tail
     });
     res.type("text/plain").send(logsStream.toString("utf8"));
+  } catch (error) {
+    res.status(500).json(formatDockerError(error));
+  }
+});
+
+app.get("/api/images", async (_req, res) => {
+  try {
+    const images = await docker.listImages({ all: true });
+    res.json(images.map(normalizeImage));
+  } catch (error) {
+    res.status(500).json(formatDockerError(error));
+  }
+});
+
+app.delete("/api/images/:id", async (req, res) => {
+  try {
+    const forceQuery = String(req.query.force || "").toLowerCase();
+    const force = forceQuery === "1" || forceQuery === "true" || forceQuery === "yes";
+    await docker.getImage(req.params.id).remove({ force });
+    res.json({ ok: true, force });
   } catch (error) {
     res.status(500).json(formatDockerError(error));
   }
