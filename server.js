@@ -1,7 +1,7 @@
 import http from "node:http";
 import crypto from "node:crypto";
 import os from "node:os";
-import { URL } from "node:url";
+import { URL, fileURLToPath } from "node:url";
 import express from "express";
 import Docker from "dockerode";
 import { WebSocketServer } from "ws";
@@ -29,6 +29,7 @@ const sessionSecret = process.env.AUTH_SESSION_SECRET || dashboardPassword;
 const previousContainerSamples = new Map();
 let previousAggregateSample = null;
 let previousHostCpuTimes = null;
+const dashboardFaviconPath = fileURLToPath(new URL("./docker-dashboard.svg", import.meta.url));
 
 function formatDockerError(error) {
   const message = error?.json?.message || error?.reason || error?.message || "Unknown Docker error";
@@ -123,6 +124,7 @@ function renderLoginPage(hasError) {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Docker Dashboard Login</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <style>
       * { box-sizing: border-box; }
       body { margin:0; min-height:100vh; display:grid; place-items:center; background:#0f172a; color:#e2e8f0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
@@ -303,6 +305,10 @@ app.post("/auth/login", (req, res) => {
 app.post("/auth/logout", (_req, res) => {
   clearSessionCookie(res);
   res.status(204).end();
+});
+
+app.get("/favicon.svg", (_req, res) => {
+  res.type("image/svg+xml").sendFile(dashboardFaviconPath);
 });
 
 app.use((req, res, next) => {
