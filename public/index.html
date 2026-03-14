@@ -152,6 +152,36 @@
         <button class="pane-resize-handle pane-resize-handle-left" type="button" title="Drag to resize pane" aria-label="Resize Logs pane"></button>
         <button class="pane-resize-handle" type="button" title="Drag to resize pane" aria-label="Resize Logs pane"></button>
       </section>
+
+      <section class="card dashboard-pane" data-pane-id="exposedApps">
+        <div class="pane-header">
+          <h2>Exposed Apps</h2>
+          <button class="pane-drag-handle" type="button" title="Drag to move pane" aria-label="Move Exposed Apps pane">↕↔</button>
+        </div>
+        <div class="table-wrap pane-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Application</th>
+                <th>GitHub</th>
+              </tr>
+            </thead>
+            <tbody id="exposed-apps-body">
+              <tr class="loading-row">
+                <td colspan="3">
+                  <span class="loading-inline" role="status" aria-live="polite">
+                    <span class="loading-spinner" aria-hidden="true"></span>
+                    <span>Loading exposed apps...</span>
+                  </span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <button class="pane-resize-handle pane-resize-handle-left" type="button" title="Drag to resize pane" aria-label="Resize Exposed Apps pane"></button>
+        <button class="pane-resize-handle" type="button" title="Drag to resize pane" aria-label="Resize Exposed Apps pane"></button>
+      </section>
     </main>
 
     <script src="/app.js" type="module"></script>

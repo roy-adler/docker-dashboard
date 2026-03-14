@@ -264,6 +264,11 @@ body.is-resizing {
   grid-row: span 3;
 }
 
+[data-pane-id="exposedApps"] {
+  grid-column: span 12;
+  grid-row: span 2;
+}
+
 .table-wrap {
   overflow: auto;
 }
@@ -359,6 +364,15 @@ th {
   white-space: pre-line;
   color: var(--muted);
   font-size: 0.82rem;
+}
+
+.external-link {
+  color: #93c5fd;
+  text-underline-offset: 2px;
+}
+
+.external-link:hover {
+  color: #bae6fd;
 }
 
 button {

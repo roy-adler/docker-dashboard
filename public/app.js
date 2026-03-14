@@ -4,6 +4,7 @@ const eventsLog = document.querySelector("#events-log");
 const hostPerformance = document.querySelector("#host-performance");
 const containerPerformanceBody = document.querySelector("#container-performance-body");
 const imagesBody = document.querySelector("#images-body");
+const exposedAppsBody = document.querySelector("#exposed-apps-body");
 const containerLogs = document.querySelector("#container-logs");
 const logsTarget = document.querySelector("#logs-target");
 const closeLogsBtn = document.querySelector("#close-logs-btn");
@@ -24,7 +25,8 @@ const paneDefaultLayout = {
   events: { col: 9, row: 1, colSpan: 4, rowSpan: 3 },
   performance: { col: 9, row: 4, colSpan: 4, rowSpan: 3 },
   images: { col: 1, row: 6, colSpan: 6, rowSpan: 3 },
-  logs: { col: 7, row: 6, colSpan: 6, rowSpan: 3 }
+  logs: { col: 7, row: 6, colSpan: 6, rowSpan: 3 },
+  exposedApps: { col: 1, row: 9, colSpan: 12, rowSpan: 2 }
 };
 let paneLayout = sanitizePaneLayout();
 
@@ -597,6 +599,23 @@ function renderPortsCell(portsCell, ports) {
   portsCell.appendChild(details);
 }
 
+function createExternalLinkCell(value) {
+  const cell = document.createElement("td");
+  const link = String(value || "").trim();
+  if (!link) {
+    cell.textContent = "-";
+    return cell;
+  }
+  const anchor = document.createElement("a");
+  anchor.className = "external-link";
+  anchor.href = link;
+  anchor.target = "_blank";
+  anchor.rel = "noopener noreferrer";
+  anchor.textContent = link;
+  cell.appendChild(anchor);
+  return cell;
+}
+
 async function api(path, options = {}) {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json" },
@@ -818,6 +837,33 @@ async function loadImages(options = {}) {
   }
 }
 
+async function loadExposedApps(options = {}) {
+  const pane = options.showLoading === false ? null : startPaneLoading(exposedAppsBody);
+  try {
+    const payload = await api("/api/packages");
+    const packages = Array.isArray(payload?.packages) ? payload.packages : [];
+    if (packages.length === 0) {
+      exposedAppsBody.innerHTML = '<tr><td colspan="3">No exposed apps found.</td></tr>';
+      return;
+    }
+
+    exposedAppsBody.innerHTML = "";
+    packages.forEach((entry) => {
+      const row = document.createElement("tr");
+      const nameCell = document.createElement("td");
+      nameCell.textContent = entry.name || "Unnamed application";
+      row.appendChild(nameCell);
+      row.appendChild(createExternalLinkCell(entry.applicationUrl));
+      row.appendChild(createExternalLinkCell(entry.githubUrl));
+      exposedAppsBody.appendChild(row);
+    });
+  } catch (error) {
+    exposedAppsBody.innerHTML = `<tr><td colspan="3">Error: ${error.message}</td></tr>`;
+  } finally {
+    finishPaneLoading(pane);
+  }
+}
+
 function renderHostPerformance(host) {
   hostPerformance.innerHTML = `
     <div class="metric-box">
@@ -921,6 +967,7 @@ function setAutoRefresh() {
     loadImages({ showLoading: false });
     loadSystemInfo({ showLoading: false });
     loadPerformance({ showLoading: false });
+    loadExposedApps({ showLoading: false });
   }, 5000);
 }
 
@@ -937,5 +984,6 @@ loadContainers();
 loadImages();
 loadSystemInfo();
 loadPerformance();
+loadExposedApps();
 setAutoRefresh();
 connectEvents();
