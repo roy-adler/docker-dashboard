@@ -16,6 +16,7 @@ let refreshTimer = null;
 let eventsSocket = null;
 let logsSocket = null;
 let activeResizeState = null;
+let activeDragState = null;
 const paneRevealTimers = new WeakMap();
 
 const paneGridColumns = 12;
@@ -336,6 +337,33 @@ function movePaneToGridPosition(paneId, col, row) {
   savePaneLayout().catch(() => {});
 }
 
+function removeDragGhost() {
+  if (activeDragState?.ghostElement?.isConnected) {
+    activeDragState.ghostElement.remove();
+  }
+}
+
+function updateDragGhostPosition(clientX, clientY) {
+  if (!activeDragState) {
+    return null;
+  }
+  const snapped = snapPanePositionFromPointer(activeDragState.paneId, clientX, clientY);
+  const metrics = getGridMetrics();
+  const layout = paneLayout[activeDragState.paneId] || paneDefaultLayout[activeDragState.paneId];
+  const colSpan = metrics.maxColumns === 1 ? 1 : clamp(layout.colSpan, 1, metrics.maxColumns);
+  const rowSpan = clamp(layout.rowSpan, 1, 8);
+  const left = (snapped.col - 1) * metrics.columnUnit;
+  const top = (snapped.row - 1) * metrics.rowUnit;
+  const width = colSpan * metrics.columnUnit - metrics.columnGap;
+  const height = rowSpan * metrics.rowUnit - metrics.rowGap;
+  activeDragState.col = snapped.col;
+  activeDragState.row = snapped.row;
+  activeDragState.ghostElement.style.transform = `translate(${left}px, ${top}px)`;
+  activeDragState.ghostElement.style.width = `${Math.max(10, width)}px`;
+  activeDragState.ghostElement.style.height = `${Math.max(10, height)}px`;
+  return snapped;
+}
+
 function setupPaneDragAndDrop() {
   let draggingPaneId = null;
 
@@ -351,10 +379,22 @@ function setupPaneDragAndDrop() {
       event.dataTransfer.setData("text/plain", draggingPaneId);
       pane.classList.add("dragging");
       dashboardGrid.classList.add("is-dragging-layout");
+      const ghostElement = document.createElement("div");
+      ghostElement.className = "pane-drop-ghost";
+      dashboardGrid.appendChild(ghostElement);
+      activeDragState = {
+        paneId: draggingPaneId,
+        ghostElement,
+        col: paneLayout[draggingPaneId]?.col || 1,
+        row: paneLayout[draggingPaneId]?.row || 1
+      };
+      updateDragGhostPosition(event.clientX, event.clientY);
     });
     handle.addEventListener("dragend", () => {
       draggingPaneId = null;
       dashboardGrid.classList.remove("is-dragging-layout");
+      removeDragGhost();
+      activeDragState = null;
       dashboardGrid.querySelectorAll(".dashboard-pane").forEach((pane) => {
         pane.classList.remove("dragging", "drop-target");
       });
@@ -366,6 +406,7 @@ function setupPaneDragAndDrop() {
       return;
     }
     event.preventDefault();
+    updateDragGhostPosition(event.clientX, event.clientY);
   });
 
   dashboardGrid.addEventListener("drop", (event) => {
@@ -373,9 +414,16 @@ function setupPaneDragAndDrop() {
       return;
     }
     event.preventDefault();
-    const { col, row } = snapPanePositionFromPointer(draggingPaneId, event.clientX, event.clientY);
+    updateDragGhostPosition(event.clientX, event.clientY);
+    const col = activeDragState?.col;
+    const row = activeDragState?.row;
+    if (!Number.isFinite(col) || !Number.isFinite(row)) {
+      return;
+    }
     movePaneToGridPosition(draggingPaneId, col, row);
     dashboardGrid.classList.remove("is-dragging-layout");
+    removeDragGhost();
+    activeDragState = null;
   });
 }
 

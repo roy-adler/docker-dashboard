@@ -109,6 +109,19 @@ h2 {
   opacity: 1;
 }
 
+.pane-drop-ghost {
+  position: absolute;
+  top: 0;
+  left: 0;
+  border: 2px dashed color-mix(in srgb, var(--accent) 70%, white 10%);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent) inset;
+  pointer-events: none;
+  z-index: 2;
+  transition: transform 80ms linear, width 80ms linear, height 80ms linear;
+}
+
 .dashboard-pane {
   position: relative;
   display: flex;
