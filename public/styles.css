@@ -208,6 +208,20 @@ h2 {
     linear-gradient(135deg, transparent 58%, var(--muted) 58%, var(--muted) 68%, transparent 68%),
     linear-gradient(135deg, transparent 38%, var(--muted) 38%, var(--muted) 48%, transparent 48%);
   cursor: nwse-resize;
+  opacity: 0.85;
+}
+
+.pane-resize-handle:hover {
+  opacity: 1;
+}
+
+.pane-resize-handle-left {
+  left: 6px;
+  right: auto;
+  background:
+    linear-gradient(225deg, transparent 58%, var(--muted) 58%, var(--muted) 68%, transparent 68%),
+    linear-gradient(225deg, transparent 38%, var(--muted) 38%, var(--muted) 48%, transparent 48%);
+  cursor: nesw-resize;
 }
 
 body.is-resizing {
