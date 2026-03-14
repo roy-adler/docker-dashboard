@@ -11,6 +11,7 @@
     <header class="topbar">
       <h1>Docker Dashboard</h1>
       <div class="topbar-actions">
+        <button id="reset-layout-btn">Reset layout</button>
         <button id="refresh-btn">Refresh</button>
         <label class="toggle">
           <input type="checkbox" id="auto-refresh" checked />
@@ -19,15 +20,22 @@
       </div>
     </header>
 
-    <section class="system-card">
-      <h2>Docker Engine</h2>
-      <div id="system-info">Loading system info...</div>
-    </section>
+    <main id="dashboard-grid" class="dashboard-grid">
+      <section class="card system-card dashboard-pane" data-pane-id="system">
+        <div class="pane-header">
+          <h2>Docker Engine</h2>
+          <button class="pane-drag-handle" type="button" title="Drag to move pane" aria-label="Move Docker Engine pane">Move</button>
+        </div>
+        <div id="system-info">Loading system info...</div>
+        <button class="pane-resize-handle" type="button" title="Drag to resize pane" aria-label="Resize Docker Engine pane"></button>
+      </section>
 
-    <section class="content-grid">
-      <article class="card">
-        <h2>Containers</h2>
-        <div class="table-wrap compact-table-wrap">
+      <article class="card dashboard-pane" data-pane-id="containers">
+        <div class="pane-header">
+          <h2>Containers</h2>
+          <button class="pane-drag-handle" type="button" title="Drag to move pane" aria-label="Move Containers pane">Move</button>
+        </div>
+        <div class="table-wrap pane-table-wrap">
           <table>
             <thead>
               <tr>
@@ -46,73 +54,86 @@
             </tbody>
           </table>
         </div>
+        <button class="pane-resize-handle" type="button" title="Drag to resize pane" aria-label="Resize Containers pane"></button>
       </article>
 
-      <div class="side-cards">
-        <article class="card">
+      <article class="card dashboard-pane" data-pane-id="events">
+        <div class="pane-header">
           <h2>Events</h2>
-          <pre id="events-log" class="log-view"></pre>
-        </article>
-
-        <article class="card">
-          <h2>Performance</h2>
-          <div id="host-performance" class="host-performance">Loading host metrics...</div>
-          <div class="table-wrap compact-table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Container</th>
-                  <th>CPU</th>
-                  <th>RAM</th>
-                  <th>Net RX/TX</th>
-                  <th>Net/s</th>
-                  <th>Disk R/W</th>
-                </tr>
-              </thead>
-              <tbody id="container-performance-body">
-                <tr>
-                  <td colspan="6">Loading container metrics...</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </article>
-      </div>
-    </section>
-
-    <section class="card">
-      <h2>Images</h2>
-      <div class="table-wrap compact-table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Tags</th>
-              <th>Image ID</th>
-              <th>Created</th>
-              <th>Size</th>
-              <th>Containers</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="images-body">
-            <tr>
-              <td colspan="6">Loading images...</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="logs-header">
-        <h2>Logs</h2>
-        <div>
-          <span id="logs-target">No container selected</span>
-          <button id="close-logs-btn">Close stream</button>
+          <button class="pane-drag-handle" type="button" title="Drag to move pane" aria-label="Move Events pane">Move</button>
         </div>
-      </div>
-      <pre id="container-logs" class="log-view"></pre>
-    </section>
+        <pre id="events-log" class="log-view pane-log-view"></pre>
+        <button class="pane-resize-handle" type="button" title="Drag to resize pane" aria-label="Resize Events pane"></button>
+      </article>
+
+      <article class="card dashboard-pane" data-pane-id="performance">
+        <div class="pane-header">
+          <h2>Performance</h2>
+          <button class="pane-drag-handle" type="button" title="Drag to move pane" aria-label="Move Performance pane">Move</button>
+        </div>
+        <div id="host-performance" class="host-performance">Loading host metrics...</div>
+        <div class="table-wrap pane-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Container</th>
+                <th>CPU</th>
+                <th>RAM</th>
+                <th>Net RX/TX</th>
+                <th>Net/s</th>
+                <th>Disk R/W</th>
+              </tr>
+            </thead>
+            <tbody id="container-performance-body">
+              <tr>
+                <td colspan="6">Loading container metrics...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <button class="pane-resize-handle" type="button" title="Drag to resize pane" aria-label="Resize Performance pane"></button>
+      </article>
+
+      <section class="card dashboard-pane" data-pane-id="images">
+        <div class="pane-header">
+          <h2>Images</h2>
+          <button class="pane-drag-handle" type="button" title="Drag to move pane" aria-label="Move Images pane">Move</button>
+        </div>
+        <div class="table-wrap pane-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Tags</th>
+                <th>Image ID</th>
+                <th>Created</th>
+                <th>Size</th>
+                <th>Containers</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="images-body">
+              <tr>
+                <td colspan="6">Loading images...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <button class="pane-resize-handle" type="button" title="Drag to resize pane" aria-label="Resize Images pane"></button>
+      </section>
+
+      <section class="card dashboard-pane" data-pane-id="logs">
+        <div class="pane-header">
+          <h2>Logs</h2>
+          <div class="pane-header-actions">
+            <span id="logs-target">No container selected</span>
+            <button id="close-logs-btn">Close stream</button>
+            <button class="pane-drag-handle" type="button" title="Drag to move pane" aria-label="Move Logs pane">Move</button>
+          </div>
+        </div>
+        <pre id="container-logs" class="log-view pane-log-view"></pre>
+        <button class="pane-resize-handle" type="button" title="Drag to resize pane" aria-label="Resize Logs pane"></button>
+      </section>
+    </main>
 
     <script src="/app.js" type="module"></script>
   </body>
