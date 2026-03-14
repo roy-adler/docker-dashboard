@@ -455,12 +455,30 @@ function handleResizeMove(event) {
   if (!activeResizeState) {
     return;
   }
-  const { paneId, startX, startY, startColSpan, startRowSpan, columnUnit, rowUnit, maxColumns } =
-    activeResizeState;
+  const {
+    paneId,
+    startX,
+    startY,
+    startCol,
+    startColSpan,
+    startRowSpan,
+    columnUnit,
+    rowUnit,
+    maxColumns,
+    edge
+  } = activeResizeState;
   const deltaColumns = Math.round((event.clientX - startX) / columnUnit);
   const deltaRows = Math.round((event.clientY - startY) / rowUnit);
-  const colSpan = clamp(startColSpan + deltaColumns, 1, maxColumns);
+  let col = startCol;
+  let colSpan = clamp(startColSpan + deltaColumns, 1, maxColumns);
+  if (edge === "left") {
+    const rightEdge = startCol + startColSpan - 1;
+    const nextLeft = clamp(startCol + deltaColumns, 1, rightEdge);
+    col = nextLeft;
+    colSpan = clamp(rightEdge - nextLeft + 1, 1, maxColumns);
+  }
   const rowSpan = clamp(startRowSpan + deltaRows, 1, 8);
+  paneLayout[paneId].col = col;
   updatePaneSize(paneId, colSpan, rowSpan);
 }
 
@@ -482,17 +500,20 @@ function startPaneResize(event) {
   if (!paneId) {
     return;
   }
+  const isLeftHandle = event.currentTarget.classList.contains("pane-resize-handle-left");
   const { maxColumns, columnUnit, rowUnit } = getGridMetrics();
 
   activeResizeState = {
     paneId,
     startX: event.clientX,
     startY: event.clientY,
+    startCol: paneLayout[paneId].col,
     startColSpan: paneLayout[paneId].colSpan,
     startRowSpan: paneLayout[paneId].rowSpan,
     columnUnit,
     rowUnit,
-    maxColumns
+    maxColumns,
+    edge: isLeftHandle ? "left" : "right"
   };
   document.body.classList.add("is-resizing");
   dashboardGrid.classList.add("is-dragging-layout");
