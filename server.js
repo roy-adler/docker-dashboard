@@ -35,8 +35,8 @@ let previousHostCpuTimes = null;
 const dashboardFaviconPath = fileURLToPath(new URL("./public/docker-dashboard.svg", import.meta.url));
 const layoutStorePath = process.env.LAYOUT_STORE_PATH || "/data/layout.json";
 const packagesSourceUrl = process.env.PACKAGES_SOURCE_URL || "https://dockinfo.royadler.de/packages";
-const packagesFetchTimeoutMs = Math.max(1000, Number(process.env.PACKAGES_FETCH_TIMEOUT_MS || 12000));
-const packagesFetchRetries = Math.max(1, Number(process.env.PACKAGES_FETCH_RETRIES || 3));
+const packagesFetchTimeoutMs = Math.max(1000, Number(process.env.PACKAGES_FETCH_TIMEOUT_MS || 5000));
+const packagesFetchRetries = Math.max(1, Number(process.env.PACKAGES_FETCH_RETRIES || 2));
 let cachedPackagesPayload = null;
 let cachedPackagesFetchedAt = 0;
 

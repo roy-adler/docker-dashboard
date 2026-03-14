@@ -12,11 +12,32 @@ const dashboardGrid = document.querySelector("#dashboard-grid");
 const paneDragHandles = document.querySelectorAll(".pane-drag-handle");
 
 let refreshTimer = null;
+let exposedAppsRefreshTimer = null;
 let eventsSocket = null;
 let logsSocket = null;
 let activeResizeState = null;
 let activeDragState = null;
 const paneRevealTimers = new WeakMap();
+let exposedAppsRequestInFlight = null;
+
+const packagesSourceUrl = "https://dockinfo.royadler.de/packages";
+const packagesFallbackSources = [
+  {
+    name: "direct",
+    url: () => packagesSourceUrl,
+    parseMode: "json"
+  },
+  {
+    name: "allorigins-raw",
+    url: () => `https://api.allorigins.win/raw?url=${encodeURIComponent(packagesSourceUrl)}`,
+    parseMode: "json"
+  },
+  {
+    name: "allorigins-get",
+    url: () => `https://api.allorigins.win/get?url=${encodeURIComponent(packagesSourceUrl)}`,
+    parseMode: "allorigins"
+  }
+];
 
 const paneGridColumns = 12;
 const paneDefaultLayout = {
@@ -632,6 +653,77 @@ async function api(path, options = {}) {
   return response.text();
 }
 
+async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 6000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+    return response;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function normalizePackagesResponse(data) {
+  if (Array.isArray(data)) {
+    return data;
+  }
+  if (data && Array.isArray(data.packages)) {
+    return data.packages;
+  }
+  throw new Error("Invalid packages payload");
+}
+
+function normalizePackageEntry(entry, index = 0) {
+  return {
+    id: String(entry?.id || entry?.name || `pkg-${index}`),
+    name: String(entry?.name || "Unnamed application"),
+    applicationUrl: String(entry?.applicationUrl || entry?.application_url || entry?.url || ""),
+    githubUrl: String(entry?.githubUrl || entry?.github_url || "")
+  };
+}
+
+async function fetchPackagesFromFallbackSources() {
+  const errors = [];
+  for (const source of packagesFallbackSources) {
+    try {
+      const response = await fetchJsonWithTimeout(
+        source.url(),
+        {
+          method: "GET",
+          mode: "cors",
+          cache: "no-store",
+          headers: { Accept: "application/json" }
+        },
+        8000
+      );
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      let payload;
+      if (source.parseMode === "allorigins") {
+        const wrapped = await response.json();
+        if (!wrapped || typeof wrapped.contents !== "string") {
+          throw new Error("Unexpected proxy payload");
+        }
+        payload = JSON.parse(wrapped.contents);
+      } else {
+        payload = await response.json();
+      }
+      const normalized = normalizePackagesResponse(payload).map((entry, index) =>
+        normalizePackageEntry(entry, index)
+      );
+      return normalized;
+    } catch (error) {
+      errors.push(`${source.name}: ${error.message}`);
+    }
+  }
+  throw new Error(`Fallback sources failed: ${errors.join(" | ")}`);
+}
+
 async function loadSystemInfo(options = {}) {
   const pane = options.showLoading === false ? null : startPaneLoading(systemInfo);
   try {
@@ -838,10 +930,26 @@ async function loadImages(options = {}) {
 }
 
 async function loadExposedApps(options = {}) {
+  if (exposedAppsRequestInFlight) {
+    return exposedAppsRequestInFlight;
+  }
   const pane = options.showLoading === false ? null : startPaneLoading(exposedAppsBody);
-  try {
-    const payload = await api("/api/packages");
-    const packages = Array.isArray(payload?.packages) ? payload.packages : [];
+  exposedAppsRequestInFlight = (async () => {
+    let packages = [];
+    let sourceError = null;
+    try {
+      const response = await fetchJsonWithTimeout("/api/packages", { headers: { Accept: "application/json" } }, 6000);
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || `Request failed with status ${response.status}`);
+      }
+      const payload = await response.json();
+      packages = normalizePackagesResponse(payload).map((entry, index) => normalizePackageEntry(entry, index));
+    } catch (error) {
+      sourceError = error;
+      packages = await fetchPackagesFromFallbackSources();
+    }
+
     if (packages.length === 0) {
       exposedAppsBody.innerHTML = '<tr><td colspan="3">No exposed apps found.</td></tr>';
       return;
@@ -857,11 +965,23 @@ async function loadExposedApps(options = {}) {
       row.appendChild(createExternalLinkCell(entry.githubUrl));
       exposedAppsBody.appendChild(row);
     });
-  } catch (error) {
-    exposedAppsBody.innerHTML = `<tr><td colspan="3">Error: ${error.message}</td></tr>`;
-  } finally {
-    finishPaneLoading(pane);
-  }
+
+    if (sourceError) {
+      // Keep data visible while still signaling degraded path.
+      const warningRow = document.createElement("tr");
+      warningRow.innerHTML = `<td colspan="3">Note: backend source failed, used direct/proxy fallback (${sourceError.message}).</td>`;
+      exposedAppsBody.prepend(warningRow);
+    }
+  })()
+    .catch((error) => {
+      exposedAppsBody.innerHTML = `<tr><td colspan="3">Error: ${error.message}</td></tr>`;
+    })
+    .finally(() => {
+      finishPaneLoading(pane);
+      exposedAppsRequestInFlight = null;
+    });
+
+  return exposedAppsRequestInFlight;
 }
 
 function renderHostPerformance(host) {
@@ -967,8 +1087,15 @@ function setAutoRefresh() {
     loadImages({ showLoading: false });
     loadSystemInfo({ showLoading: false });
     loadPerformance({ showLoading: false });
-    loadExposedApps({ showLoading: false });
   }, 5000);
+
+  if (exposedAppsRefreshTimer) {
+    clearInterval(exposedAppsRefreshTimer);
+    exposedAppsRefreshTimer = null;
+  }
+  exposedAppsRefreshTimer = setInterval(() => {
+    loadExposedApps({ showLoading: false });
+  }, 60000);
 }
 
 closeLogsBtn.addEventListener("click", () => {
