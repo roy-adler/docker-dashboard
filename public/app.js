@@ -318,12 +318,12 @@ function getGridMetrics() {
   };
 }
 
-function snapPanePositionFromPointer(paneId, clientX, clientY) {
+function snapPanePositionFromPointer(paneId, clientX, clientY, anchorX = 0, anchorY = 0) {
   const metrics = getGridMetrics();
   const layout = paneLayout[paneId] || paneDefaultLayout[paneId];
   const colSpan = metrics.maxColumns === 1 ? 1 : clamp(layout.colSpan, 1, metrics.maxColumns);
-  const x = clientX - metrics.gridRect.left;
-  const y = clientY - metrics.gridRect.top;
+  const x = clientX - metrics.gridRect.left - anchorX;
+  const y = clientY - metrics.gridRect.top - anchorY;
   const snappedCol = clamp(Math.round(x / metrics.columnUnit) + 1, 1, Math.max(1, metrics.maxColumns - colSpan + 1));
   const snappedRow = clamp(Math.round(y / metrics.rowUnit) + 1, 1, 400);
   return { col: snappedCol, row: snappedRow };
@@ -347,7 +347,13 @@ function updateDragGhostPosition(clientX, clientY) {
   if (!activeDragState) {
     return null;
   }
-  const snapped = snapPanePositionFromPointer(activeDragState.paneId, clientX, clientY);
+  const snapped = snapPanePositionFromPointer(
+    activeDragState.paneId,
+    clientX,
+    clientY,
+    activeDragState.anchorX,
+    activeDragState.anchorY
+  );
   const metrics = getGridMetrics();
   const layout = paneLayout[activeDragState.paneId] || paneDefaultLayout[activeDragState.paneId];
   const colSpan = metrics.maxColumns === 1 ? 1 : clamp(layout.colSpan, 1, metrics.maxColumns);
@@ -382,9 +388,12 @@ function setupPaneDragAndDrop() {
       const ghostElement = document.createElement("div");
       ghostElement.className = "pane-drop-ghost";
       dashboardGrid.appendChild(ghostElement);
+      const paneRect = pane.getBoundingClientRect();
       activeDragState = {
         paneId: draggingPaneId,
         ghostElement,
+        anchorX: clamp(event.clientX - paneRect.left, 0, paneRect.width),
+        anchorY: clamp(event.clientY - paneRect.top, 0, paneRect.height),
         col: paneLayout[draggingPaneId]?.col || 1,
         row: paneLayout[draggingPaneId]?.row || 1
       };
