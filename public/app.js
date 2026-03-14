@@ -528,8 +528,8 @@ async function api(path, options = {}) {
   return response.text();
 }
 
-async function loadSystemInfo() {
-  const pane = startPaneLoading(systemInfo);
+async function loadSystemInfo(options = {}) {
+  const pane = options.showLoading === false ? null : startPaneLoading(systemInfo);
   try {
     const payload = await api("/api/system/info");
     setSystemInfoText(
@@ -642,8 +642,8 @@ function openLogs(container) {
   };
 }
 
-async function loadContainers() {
-  const pane = startPaneLoading(containersBody);
+async function loadContainers(options = {}) {
+  const pane = options.showLoading === false ? null : startPaneLoading(containersBody);
   try {
     const containers = await api("/api/containers");
     if (containers.length === 0) {
@@ -697,8 +697,8 @@ async function loadContainers() {
   }
 }
 
-async function loadImages() {
-  const pane = startPaneLoading(imagesBody);
+async function loadImages(options = {}) {
+  const pane = options.showLoading === false ? null : startPaneLoading(imagesBody);
   try {
     const images = await api("/api/images");
     if (images.length === 0) {
@@ -754,8 +754,8 @@ function renderHostPerformance(host) {
   `;
 }
 
-async function loadPerformance() {
-  const pane = startPaneLoading(hostPerformance);
+async function loadPerformance(options = {}) {
+  const pane = options.showLoading === false ? null : startPaneLoading(hostPerformance);
   try {
     const payload = await api("/api/metrics");
     renderHostPerformance(payload.host);
@@ -833,10 +833,10 @@ function setAutoRefresh(enabled) {
   }
   if (enabled) {
     refreshTimer = setInterval(() => {
-      loadContainers();
-      loadImages();
-      loadSystemInfo();
-      loadPerformance();
+      loadContainers({ showLoading: false });
+      loadImages({ showLoading: false });
+      loadSystemInfo({ showLoading: false });
+      loadPerformance({ showLoading: false });
     }, 5000);
   }
 }
