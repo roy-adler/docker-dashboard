@@ -21,6 +21,7 @@ const paneRevealTimers = new WeakMap();
 let exposedAppsRequestInFlight = null;
 
 const packagesSourceUrl = "https://dockinfo.royadler.de/packages";
+const packagesBackendTimeoutMs = 7000;
 const packagesFallbackSources = [
   {
     name: "direct",
@@ -670,6 +671,18 @@ async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 6000) {
   }
 }
 
+function toReadableErrorMessage(error, timeoutMs = 0) {
+  if (!error) {
+    return "unknown error";
+  }
+  if (error.name === "AbortError") {
+    return timeoutMs > 0
+      ? `request timed out after ${timeoutMs} ms`
+      : "request timed out";
+  }
+  return String(error.message || error);
+}
+
 function normalizePackagesResponse(data) {
   if (Array.isArray(data)) {
     return data;
@@ -941,7 +954,11 @@ async function loadExposedApps(options = {}) {
     let packages = [];
     let sourceError = null;
     try {
-      const response = await fetchJsonWithTimeout("/api/packages", { headers: { Accept: "application/json" } }, 6000);
+      const response = await fetchJsonWithTimeout(
+        "/api/packages",
+        { headers: { Accept: "application/json" } },
+        packagesBackendTimeoutMs
+      );
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload.error || `Request failed with status ${response.status}`);
@@ -949,7 +966,7 @@ async function loadExposedApps(options = {}) {
       const payload = await response.json();
       packages = normalizePackagesResponse(payload).map((entry, index) => normalizePackageEntry(entry, index));
     } catch (error) {
-      sourceError = error;
+      sourceError = new Error(toReadableErrorMessage(error, packagesBackendTimeoutMs));
       packages = await fetchPackagesFromFallbackSources();
     }
 
@@ -972,7 +989,7 @@ async function loadExposedApps(options = {}) {
     if (sourceError) {
       // Keep data visible while still signaling degraded path.
       const warningRow = document.createElement("tr");
-      warningRow.innerHTML = `<td colspan="3">Note: backend source failed, used direct/proxy fallback (${sourceError.message}).</td>`;
+      warningRow.innerHTML = `<td colspan="3">Note: backend source timed out/unavailable, using direct/proxy fallback (${sourceError.message}).</td>`;
       exposedAppsBody.prepend(warningRow);
     }
   })()
