@@ -181,14 +181,19 @@ h2 {
 }
 
 .pane-drag-handle {
-  font-size: 0.92rem;
-  font-weight: 700;
-  letter-spacing: -0.06em;
-  padding: 4px 7px;
-  min-width: 34px;
+  padding: 4px 6px;
+  min-width: 30px;
   text-align: center;
   line-height: 1;
   cursor: grab;
+}
+
+.pane-drag-handle svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+  fill: currentColor;
+  opacity: 0.9;
 }
 
 .pane-drag-handle:active {

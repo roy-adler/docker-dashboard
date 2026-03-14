@@ -8,6 +8,7 @@ const containerLogs = document.querySelector("#container-logs");
 const logsTarget = document.querySelector("#logs-target");
 const closeLogsBtn = document.querySelector("#close-logs-btn");
 const dashboardGrid = document.querySelector("#dashboard-grid");
+const paneDragHandles = document.querySelectorAll(".pane-drag-handle");
 
 let refreshTimer = null;
 let eventsSocket = null;
@@ -26,6 +27,16 @@ const paneDefaultLayout = {
   logs: { col: 7, row: 6, colSpan: 6, rowSpan: 3 }
 };
 let paneLayout = sanitizePaneLayout();
+
+const paneDragIconSvg = `
+  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M12 2l3 3h-2v4h4V7l3 3-3 3v-2h-4v4h2l-3 3-3-3h2v-4H7v2l-3-3 3-3v2h4V5H9z"></path>
+  </svg>
+`;
+
+paneDragHandles.forEach((handle) => {
+  handle.innerHTML = paneDragIconSvg;
+});
 
 function setSystemInfoText(text) {
   systemInfo.textContent = text;
