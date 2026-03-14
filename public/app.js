@@ -454,6 +454,7 @@ function stopPaneResize() {
   savePaneLayout().catch(() => {});
   activeResizeState = null;
   document.body.classList.remove("is-resizing");
+  dashboardGrid.classList.remove("is-dragging-layout");
   window.removeEventListener("pointermove", handleResizeMove);
   window.removeEventListener("pointerup", stopPaneResize);
 }
@@ -477,6 +478,7 @@ function startPaneResize(event) {
     maxColumns
   };
   document.body.classList.add("is-resizing");
+  dashboardGrid.classList.add("is-dragging-layout");
   window.addEventListener("pointermove", handleResizeMove);
   window.addEventListener("pointerup", stopPaneResize);
 }
