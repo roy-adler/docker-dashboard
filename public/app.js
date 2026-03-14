@@ -6,9 +6,6 @@ const containerPerformanceBody = document.querySelector("#container-performance-
 const imagesBody = document.querySelector("#images-body");
 const containerLogs = document.querySelector("#container-logs");
 const logsTarget = document.querySelector("#logs-target");
-const refreshBtn = document.querySelector("#refresh-btn");
-const resetLayoutBtn = document.querySelector("#reset-layout-btn");
-const autoRefreshCheckbox = document.querySelector("#auto-refresh");
 const closeLogsBtn = document.querySelector("#close-logs-btn");
 const dashboardGrid = document.querySelector("#dashboard-grid");
 
@@ -508,12 +505,6 @@ async function initializePaneLayout() {
     reflowPaneLayout();
     applyPaneLayout();
   });
-  resetLayoutBtn.addEventListener("click", () => {
-    paneLayout = sanitizePaneLayout();
-    reflowPaneLayout();
-    applyPaneLayout();
-    savePaneLayout().catch(() => {});
-  });
 }
 
 function formatPorts(ports) {
@@ -888,31 +879,18 @@ function connectEvents() {
   };
 }
 
-function setAutoRefresh(enabled) {
+function setAutoRefresh() {
   if (refreshTimer) {
     clearInterval(refreshTimer);
     refreshTimer = null;
   }
-  if (enabled) {
-    refreshTimer = setInterval(() => {
-      loadContainers({ showLoading: false });
-      loadImages({ showLoading: false });
-      loadSystemInfo({ showLoading: false });
-      loadPerformance({ showLoading: false });
-    }, 5000);
-  }
+  refreshTimer = setInterval(() => {
+    loadContainers({ showLoading: false });
+    loadImages({ showLoading: false });
+    loadSystemInfo({ showLoading: false });
+    loadPerformance({ showLoading: false });
+  }, 5000);
 }
-
-refreshBtn.addEventListener("click", () => {
-  loadContainers();
-  loadImages();
-  loadSystemInfo();
-  loadPerformance();
-});
-
-autoRefreshCheckbox.addEventListener("change", () => {
-  setAutoRefresh(autoRefreshCheckbox.checked);
-});
 
 closeLogsBtn.addEventListener("click", () => {
   if (logsSocket) {
@@ -927,5 +905,5 @@ loadContainers();
 loadImages();
 loadSystemInfo();
 loadPerformance();
-setAutoRefresh(true);
+setAutoRefresh();
 connectEvents();

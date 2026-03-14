@@ -21,34 +21,6 @@ body {
   color: var(--text);
 }
 
-.topbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--border);
-  background: #0f172a;
-}
-
-.topbar h1 {
-  margin: 0;
-  font-size: 1.25rem;
-}
-
-.topbar-actions {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-
-.toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.9rem;
-  color: var(--muted);
-}
-
 .system-card,
 .card {
   border: 1px solid var(--border);

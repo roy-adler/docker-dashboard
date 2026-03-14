@@ -32,7 +32,7 @@ const previousContainerSamples = new Map();
 let previousAggregateSample = null;
 let previousHostCpuTimes = null;
 const dashboardFaviconPath = fileURLToPath(new URL("./docker-dashboard.svg", import.meta.url));
-const layoutStorePath = process.env.LAYOUT_STORE_PATH || path.join(process.cwd(), "data", "layout.json");
+const layoutStorePath = process.env.LAYOUT_STORE_PATH || "/data/layout.json";
 
 async function readStoredLayout() {
   try {
