@@ -350,9 +350,11 @@ function setupPaneDragAndDrop() {
       event.dataTransfer.effectAllowed = "move";
       event.dataTransfer.setData("text/plain", draggingPaneId);
       pane.classList.add("dragging");
+      dashboardGrid.classList.add("is-dragging-layout");
     });
     handle.addEventListener("dragend", () => {
       draggingPaneId = null;
+      dashboardGrid.classList.remove("is-dragging-layout");
       dashboardGrid.querySelectorAll(".dashboard-pane").forEach((pane) => {
         pane.classList.remove("dragging", "drop-target");
       });
@@ -373,6 +375,7 @@ function setupPaneDragAndDrop() {
     event.preventDefault();
     const { col, row } = snapPanePositionFromPointer(draggingPaneId, event.clientX, event.clientY);
     movePaneToGridPosition(draggingPaneId, col, row);
+    dashboardGrid.classList.remove("is-dragging-layout");
   });
 }
 
