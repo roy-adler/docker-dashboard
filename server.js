@@ -34,6 +34,10 @@ let previousHostCpuTimes = null;
 const dashboardFaviconPath = fileURLToPath(new URL("./public/docker-dashboard.svg", import.meta.url));
 const layoutStorePath = process.env.LAYOUT_STORE_PATH || "/data/layout.json";
 const packagesSourceUrl = process.env.PACKAGES_SOURCE_URL || "https://dockinfo.royadler.de/packages";
+const packagesFetchTimeoutMs = Math.max(1000, Number(process.env.PACKAGES_FETCH_TIMEOUT_MS || 4500));
+const packagesFetchRetries = Math.max(1, Number(process.env.PACKAGES_FETCH_RETRIES || 2));
+let cachedPackagesPayload = null;
+let cachedPackagesFetchedAt = 0;
 
 async function readStoredLayout() {
   try {
@@ -315,6 +319,54 @@ function parseContainerStats(stats, previousSample, nowMs) {
   };
 }
 
+function formatFetchError(error) {
+  const message = String(error?.message || "fetch failed");
+  const causeCode = String(error?.cause?.code || "").trim();
+  return causeCode ? `${message} (${causeCode})` : message;
+}
+
+async function fetchPackagesPayloadFromSource() {
+  let lastError = null;
+  for (let attempt = 1; attempt <= packagesFetchRetries; attempt += 1) {
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(() => abortController.abort("timeout"), packagesFetchTimeoutMs);
+    try {
+      const response = await fetch(packagesSourceUrl, {
+        headers: {
+          accept: "application/json",
+          "user-agent": "docker-dashboard/1.0"
+        },
+        signal: abortController.signal
+      });
+      clearTimeout(timeoutId);
+      if (!response.ok) {
+        throw new Error(`upstream responded ${response.status}`);
+      }
+      const payload = await response.json();
+      const rawPackages = Array.isArray(payload?.packages) ? payload.packages : [];
+      const packages = rawPackages.map((entry, index) => ({
+        id: String(entry?.id || entry?.name || `pkg-${index}`),
+        name: String(entry?.name || "Unnamed application"),
+        applicationUrl: String(entry?.application_url || ""),
+        githubUrl: String(entry?.github_url || "")
+      }));
+      return {
+        count: Number.isFinite(payload?.count) ? payload.count : packages.length,
+        packages
+      };
+    } catch (error) {
+      clearTimeout(timeoutId);
+      lastError = error;
+      if (attempt < packagesFetchRetries) {
+        await new Promise((resolve) => {
+          setTimeout(resolve, 200 * attempt);
+        });
+      }
+    }
+  }
+  throw lastError || new Error("fetch failed");
+}
+
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
@@ -378,29 +430,23 @@ app.get("/api/system/info", async (_req, res) => {
 
 app.get("/api/packages", async (_req, res) => {
   try {
-    const response = await fetch(packagesSourceUrl, {
-      headers: {
-        accept: "application/json"
-      }
-    });
-    if (!response.ok) {
-      res.status(502).json({ error: `Upstream request failed with status ${response.status}` });
+    const normalizedPayload = await fetchPackagesPayloadFromSource();
+    cachedPackagesPayload = normalizedPayload;
+    cachedPackagesFetchedAt = Date.now();
+    res.json(normalizedPayload);
+  } catch (error) {
+    if (cachedPackagesPayload) {
+      res.json({
+        ...cachedPackagesPayload,
+        stale: true,
+        staleAgeSeconds: Math.max(0, Math.round((Date.now() - cachedPackagesFetchedAt) / 1000)),
+        warning: `Using cached package data because upstream fetch failed: ${formatFetchError(error)}`
+      });
       return;
     }
-    const payload = await response.json();
-    const rawPackages = Array.isArray(payload?.packages) ? payload.packages : [];
-    const packages = rawPackages.map((entry, index) => ({
-      id: String(entry?.id || entry?.name || `pkg-${index}`),
-      name: String(entry?.name || "Unnamed application"),
-      applicationUrl: String(entry?.application_url || ""),
-      githubUrl: String(entry?.github_url || "")
-    }));
-    res.json({
-      count: Number.isFinite(payload?.count) ? payload.count : packages.length,
-      packages
+    res.status(502).json({
+      error: `Failed to load package metadata from upstream: ${formatFetchError(error)}`
     });
-  } catch (error) {
-    res.status(500).json({ error: error?.message || "Failed to load package metadata" });
   }
 });
 
