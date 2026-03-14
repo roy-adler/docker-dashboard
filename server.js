@@ -2,6 +2,8 @@ import http from "node:http";
 import crypto from "node:crypto";
 import os from "node:os";
 import { URL, fileURLToPath } from "node:url";
+import path from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import express from "express";
 import Docker from "dockerode";
 import { WebSocketServer } from "ws";
@@ -30,6 +32,39 @@ const previousContainerSamples = new Map();
 let previousAggregateSample = null;
 let previousHostCpuTimes = null;
 const dashboardFaviconPath = fileURLToPath(new URL("./docker-dashboard.svg", import.meta.url));
+const layoutStorePath = process.env.LAYOUT_STORE_PATH || path.join(process.cwd(), "data", "layout.json");
+
+async function readStoredLayout() {
+  try {
+    const contents = await readFile(layoutStorePath, "utf8");
+    const parsed = JSON.parse(contents);
+    if (!parsed || typeof parsed.layout !== "object" || parsed.layout === null) {
+      return null;
+    }
+    return parsed.layout;
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function writeStoredLayout(layout) {
+  await mkdir(path.dirname(layoutStorePath), { recursive: true });
+  await writeFile(
+    layoutStorePath,
+    JSON.stringify(
+      {
+        layout,
+        updatedAt: new Date().toISOString()
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+}
 
 function formatDockerError(error) {
   const message = error?.json?.message || error?.reason || error?.message || "Unknown Docker error";
@@ -337,6 +372,29 @@ app.get("/api/system/info", async (_req, res) => {
     res.json({ info, version });
   } catch (error) {
     res.status(500).json(formatDockerError(error));
+  }
+});
+
+app.get("/api/layout", async (_req, res) => {
+  try {
+    const layout = await readStoredLayout();
+    res.json({ layout: layout || {} });
+  } catch (error) {
+    res.status(500).json({ error: error?.message || "Failed to read stored layout" });
+  }
+});
+
+app.put("/api/layout", async (req, res) => {
+  try {
+    const layout = req.body?.layout;
+    if (!layout || typeof layout !== "object" || Array.isArray(layout)) {
+      res.status(400).json({ error: "layout must be an object" });
+      return;
+    }
+    await writeStoredLayout(layout);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: error?.message || "Failed to store layout" });
   }
 });
 

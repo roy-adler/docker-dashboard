@@ -17,7 +17,6 @@ let eventsSocket = null;
 let logsSocket = null;
 let activeResizeState = null;
 
-const paneLayoutStorageKey = "docker-dashboard-layout-v1";
 const paneGridColumns = 12;
 const paneDefaultLayout = {
   system: { order: 0, colSpan: 4, rowSpan: 1 },
@@ -27,7 +26,7 @@ const paneDefaultLayout = {
   images: { order: 4, colSpan: 6, rowSpan: 3 },
   logs: { order: 5, colSpan: 6, rowSpan: 3 }
 };
-let paneLayout = loadPaneLayout();
+let paneLayout = sanitizePaneLayout();
 
 function setSystemInfoText(text) {
   systemInfo.textContent = text;
@@ -94,20 +93,20 @@ function sanitizePaneLayout(layout = {}) {
   );
 }
 
-function loadPaneLayout() {
+async function loadPaneLayout() {
   try {
-    const raw = localStorage.getItem(paneLayoutStorageKey);
-    if (!raw) {
-      return sanitizePaneLayout();
-    }
-    return sanitizePaneLayout(JSON.parse(raw));
+    const payload = await api("/api/layout");
+    return sanitizePaneLayout(payload?.layout || {});
   } catch {
     return sanitizePaneLayout();
   }
 }
 
-function savePaneLayout() {
-  localStorage.setItem(paneLayoutStorageKey, JSON.stringify(paneLayout));
+async function savePaneLayout() {
+  await api("/api/layout", {
+    method: "PUT",
+    body: JSON.stringify({ layout: paneLayout })
+  });
 }
 
 function getCurrentGridColumns() {
@@ -148,7 +147,7 @@ function movePaneBefore(sourcePaneId, targetPaneId) {
     paneLayout[paneId].order = index;
   });
   applyPaneLayout();
-  savePaneLayout();
+  savePaneLayout().catch(() => {});
 }
 
 function setupPaneDragAndDrop() {
@@ -220,7 +219,7 @@ function stopPaneResize() {
   if (!activeResizeState) {
     return;
   }
-  savePaneLayout();
+  savePaneLayout().catch(() => {});
   activeResizeState = null;
   document.body.classList.remove("is-resizing");
   window.removeEventListener("pointermove", handleResizeMove);
@@ -262,7 +261,8 @@ function setupPaneResizers() {
   });
 }
 
-function initializePaneLayout() {
+async function initializePaneLayout() {
+  paneLayout = await loadPaneLayout();
   applyPaneLayout();
   setupPaneDragAndDrop();
   setupPaneResizers();
@@ -270,7 +270,7 @@ function initializePaneLayout() {
   resetLayoutBtn.addEventListener("click", () => {
     paneLayout = sanitizePaneLayout();
     applyPaneLayout();
-    savePaneLayout();
+    savePaneLayout().catch(() => {});
   });
 }
 
