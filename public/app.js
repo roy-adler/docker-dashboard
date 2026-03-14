@@ -20,12 +20,12 @@ const paneRevealTimers = new WeakMap();
 
 const paneGridColumns = 12;
 const paneDefaultLayout = {
-  system: { order: 0, colSpan: 4, rowSpan: 1 },
-  containers: { order: 1, colSpan: 8, rowSpan: 4 },
-  events: { order: 2, colSpan: 4, rowSpan: 3 },
-  performance: { order: 3, colSpan: 8, rowSpan: 3 },
-  images: { order: 4, colSpan: 6, rowSpan: 3 },
-  logs: { order: 5, colSpan: 6, rowSpan: 3 }
+  system: { col: 1, row: 1, colSpan: 4, rowSpan: 1 },
+  containers: { col: 1, row: 2, colSpan: 8, rowSpan: 4 },
+  events: { col: 9, row: 1, colSpan: 4, rowSpan: 3 },
+  performance: { col: 9, row: 4, colSpan: 4, rowSpan: 3 },
+  images: { col: 1, row: 6, colSpan: 6, rowSpan: 3 },
+  logs: { col: 7, row: 6, colSpan: 6, rowSpan: 3 }
 };
 let paneLayout = sanitizePaneLayout();
 
@@ -103,22 +103,123 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
-function sanitizePaneLayout(layout = {}) {
-  return Object.fromEntries(
-    Object.entries(paneDefaultLayout).map(([paneId, defaults]) => {
-      const entry = layout[paneId] || {};
-      return [
-        paneId,
-        {
-          order: Number.isFinite(entry.order) ? clamp(Math.round(entry.order), 0, 99) : defaults.order,
-          colSpan: Number.isFinite(entry.colSpan)
-            ? clamp(Math.round(entry.colSpan), 1, paneGridColumns)
-            : defaults.colSpan,
-          rowSpan: Number.isFinite(entry.rowSpan) ? clamp(Math.round(entry.rowSpan), 1, 8) : defaults.rowSpan
-        }
-      ];
-    })
+function makeGridCellKey(col, row) {
+  return `${col}:${row}`;
+}
+
+function markAreaAsOccupied(occupiedCells, col, row, colSpan, rowSpan) {
+  for (let rowOffset = 0; rowOffset < rowSpan; rowOffset += 1) {
+    for (let colOffset = 0; colOffset < colSpan; colOffset += 1) {
+      occupiedCells.add(makeGridCellKey(col + colOffset, row + rowOffset));
+    }
+  }
+}
+
+function canPlaceArea(occupiedCells, col, row, colSpan, rowSpan, maxColumns) {
+  if (col < 1 || row < 1 || col + colSpan - 1 > maxColumns) {
+    return false;
+  }
+  for (let rowOffset = 0; rowOffset < rowSpan; rowOffset += 1) {
+    for (let colOffset = 0; colOffset < colSpan; colOffset += 1) {
+      if (occupiedCells.has(makeGridCellKey(col + colOffset, row + rowOffset))) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+function findAvailableGridSlot({
+  occupiedCells,
+  maxColumns,
+  colSpan,
+  rowSpan,
+  preferredCol = 1,
+  preferredRow = 1
+}) {
+  const colLimit = Math.max(1, maxColumns - colSpan + 1);
+  const startCol = clamp(preferredCol, 1, colLimit);
+  const startRow = Math.max(1, preferredRow);
+  const maxSearchRows = 300;
+
+  for (let row = startRow; row <= maxSearchRows; row += 1) {
+    const colStart = row === startRow ? startCol : 1;
+    for (let col = colStart; col <= colLimit; col += 1) {
+      if (canPlaceArea(occupiedCells, col, row, colSpan, rowSpan, maxColumns)) {
+        return { col, row };
+      }
+    }
+  }
+
+  return { col: 1, row: maxSearchRows + 1 };
+}
+
+function normalizeLegacyPaneLayout(layout = {}) {
+  const hasGridCoordinates = Object.values(layout).some(
+    (entry) => Number.isFinite(entry?.col) && Number.isFinite(entry?.row)
   );
+  if (hasGridCoordinates) {
+    return layout;
+  }
+
+  const orderedPaneIds = Object.keys(paneDefaultLayout).sort((a, b) => {
+    const orderA = Number.isFinite(layout?.[a]?.order) ? layout[a].order : Number.MAX_SAFE_INTEGER;
+    const orderB = Number.isFinite(layout?.[b]?.order) ? layout[b].order : Number.MAX_SAFE_INTEGER;
+    if (orderA !== orderB) {
+      return orderA - orderB;
+    }
+    return paneDefaultLayout[a].row - paneDefaultLayout[b].row;
+  });
+
+  const occupiedCells = new Set();
+  const normalizedLayout = {};
+  orderedPaneIds.forEach((paneId) => {
+    const defaults = paneDefaultLayout[paneId];
+    const entry = layout[paneId] || {};
+    const colSpan = Number.isFinite(entry.colSpan)
+      ? clamp(Math.round(entry.colSpan), 1, paneGridColumns)
+      : defaults.colSpan;
+    const rowSpan = Number.isFinite(entry.rowSpan) ? clamp(Math.round(entry.rowSpan), 1, 8) : defaults.rowSpan;
+    const slot = findAvailableGridSlot({
+      occupiedCells,
+      maxColumns: paneGridColumns,
+      colSpan,
+      rowSpan,
+      preferredCol: defaults.col,
+      preferredRow: defaults.row
+    });
+    normalizedLayout[paneId] = { col: slot.col, row: slot.row, colSpan, rowSpan };
+    markAreaAsOccupied(occupiedCells, slot.col, slot.row, colSpan, rowSpan);
+  });
+
+  return normalizedLayout;
+}
+
+function sanitizePaneLayout(layout = {}) {
+  const normalizedLayout = normalizeLegacyPaneLayout(layout);
+  const occupiedCells = new Set();
+  const sanitized = {};
+
+  Object.keys(paneDefaultLayout).forEach((paneId) => {
+    const defaults = paneDefaultLayout[paneId];
+    const entry = normalizedLayout[paneId] || {};
+    const colSpan = Number.isFinite(entry.colSpan)
+      ? clamp(Math.round(entry.colSpan), 1, paneGridColumns)
+      : defaults.colSpan;
+    const rowSpan = Number.isFinite(entry.rowSpan) ? clamp(Math.round(entry.rowSpan), 1, 8) : defaults.rowSpan;
+    const slot = findAvailableGridSlot({
+      occupiedCells,
+      maxColumns: paneGridColumns,
+      colSpan,
+      rowSpan,
+      preferredCol: Number.isFinite(entry.col) ? Math.round(entry.col) : defaults.col,
+      preferredRow: Number.isFinite(entry.row) ? Math.round(entry.row) : defaults.row
+    });
+    sanitized[paneId] = { col: slot.col, row: slot.row, colSpan, rowSpan };
+    markAreaAsOccupied(occupiedCells, slot.col, slot.row, colSpan, rowSpan);
+  });
+
+  return sanitized;
 }
 
 async function loadPaneLayout() {
@@ -148,32 +249,89 @@ function applyPaneLayout() {
     const paneId = pane.dataset.paneId;
     const layout = paneLayout[paneId] || paneDefaultLayout[paneId];
     const columnSpan = currentColumns === 1 ? 1 : clamp(layout.colSpan, 1, currentColumns);
-    pane.style.order = String(layout.order);
-    pane.style.gridColumn = `span ${columnSpan}`;
-    pane.style.gridRow = `span ${layout.rowSpan}`;
+    const startColumn =
+      currentColumns === 1 ? 1 : clamp(layout.col || 1, 1, Math.max(1, currentColumns - columnSpan + 1));
+    const startRow = clamp(layout.row || 1, 1, 400);
+    pane.style.order = "";
+    pane.style.gridColumn = `${startColumn} / span ${columnSpan}`;
+    pane.style.gridRow = `${startRow} / span ${layout.rowSpan}`;
   });
 }
 
-function getOrderedPaneIds() {
-  return [...dashboardGrid.querySelectorAll(".dashboard-pane")]
-    .sort((a, b) => Number(a.style.order || 0) - Number(b.style.order || 0))
-    .map((pane) => pane.dataset.paneId);
+function reflowPaneLayout(primaryPaneId) {
+  const maxColumns = getCurrentGridColumns();
+  const occupiedCells = new Set();
+  const paneIds = Object.keys(paneDefaultLayout).sort((a, b) => {
+    if (a === primaryPaneId) {
+      return -1;
+    }
+    if (b === primaryPaneId) {
+      return 1;
+    }
+    const layoutA = paneLayout[a] || paneDefaultLayout[a];
+    const layoutB = paneLayout[b] || paneDefaultLayout[b];
+    if (layoutA.row !== layoutB.row) {
+      return layoutA.row - layoutB.row;
+    }
+    return layoutA.col - layoutB.col;
+  });
+
+  const reflowed = {};
+  paneIds.forEach((paneId) => {
+    const defaults = paneDefaultLayout[paneId];
+    const current = paneLayout[paneId] || defaults;
+    const colSpan = maxColumns === 1 ? 1 : clamp(current.colSpan || defaults.colSpan, 1, maxColumns);
+    const rowSpan = clamp(current.rowSpan || defaults.rowSpan, 1, 8);
+    const preferredCol = maxColumns === 1 ? 1 : clamp(current.col || defaults.col, 1, maxColumns);
+    const preferredRow = clamp(current.row || defaults.row, 1, 400);
+    const slot = findAvailableGridSlot({
+      occupiedCells,
+      maxColumns,
+      colSpan,
+      rowSpan,
+      preferredCol,
+      preferredRow
+    });
+    reflowed[paneId] = { col: slot.col, row: slot.row, colSpan, rowSpan };
+    markAreaAsOccupied(occupiedCells, slot.col, slot.row, colSpan, rowSpan);
+  });
+
+  paneLayout = reflowed;
 }
 
-function movePaneBefore(sourcePaneId, targetPaneId) {
-  if (sourcePaneId === targetPaneId) {
-    return;
-  }
-  const paneIds = getOrderedPaneIds();
-  const sourceIndex = paneIds.indexOf(sourcePaneId);
-  const targetIndex = paneIds.indexOf(targetPaneId);
-  if (sourceIndex < 0 || targetIndex < 0) {
-    return;
-  }
-  paneIds.splice(targetIndex, 0, paneIds.splice(sourceIndex, 1)[0]);
-  paneIds.forEach((paneId, index) => {
-    paneLayout[paneId].order = index;
-  });
+function getGridMetrics() {
+  const computedStyles = getComputedStyle(dashboardGrid);
+  const columnGap = Number.parseFloat(computedStyles.columnGap || computedStyles.gap || "0") || 0;
+  const rowGap = Number.parseFloat(computedStyles.rowGap || computedStyles.gap || "0") || 0;
+  const maxColumns = getCurrentGridColumns();
+  const gridRect = dashboardGrid.getBoundingClientRect();
+  const columnWidth = (gridRect.width - columnGap * (maxColumns - 1)) / maxColumns;
+  const rowHeight = Number.parseFloat(computedStyles.gridAutoRows || "120") || 120;
+  return {
+    gridRect,
+    maxColumns,
+    columnGap,
+    rowGap,
+    columnUnit: Math.max(1, columnWidth + columnGap),
+    rowUnit: Math.max(1, rowHeight + rowGap)
+  };
+}
+
+function snapPanePositionFromPointer(paneId, clientX, clientY) {
+  const metrics = getGridMetrics();
+  const layout = paneLayout[paneId] || paneDefaultLayout[paneId];
+  const colSpan = metrics.maxColumns === 1 ? 1 : clamp(layout.colSpan, 1, metrics.maxColumns);
+  const x = clientX - metrics.gridRect.left;
+  const y = clientY - metrics.gridRect.top;
+  const snappedCol = clamp(Math.round(x / metrics.columnUnit) + 1, 1, Math.max(1, metrics.maxColumns - colSpan + 1));
+  const snappedRow = clamp(Math.round(y / metrics.rowUnit) + 1, 1, 400);
+  return { col: snappedCol, row: snappedRow };
+}
+
+function movePaneToGridPosition(paneId, col, row) {
+  paneLayout[paneId].col = col;
+  paneLayout[paneId].row = row;
+  reflowPaneLayout(paneId);
   applyPaneLayout();
   savePaneLayout().catch(() => {});
 }
@@ -201,32 +359,27 @@ function setupPaneDragAndDrop() {
     });
   });
 
-  dashboardGrid.querySelectorAll(".dashboard-pane").forEach((pane) => {
-    pane.addEventListener("dragover", (event) => {
-      if (!draggingPaneId || pane.dataset.paneId === draggingPaneId) {
-        return;
-      }
-      event.preventDefault();
-      pane.classList.add("drop-target");
-    });
-    pane.addEventListener("dragleave", () => {
-      pane.classList.remove("drop-target");
-    });
-    pane.addEventListener("drop", (event) => {
-      if (!draggingPaneId) {
-        return;
-      }
-      event.preventDefault();
-      const targetPaneId = pane.dataset.paneId;
-      pane.classList.remove("drop-target");
-      movePaneBefore(draggingPaneId, targetPaneId);
-    });
+  dashboardGrid.addEventListener("dragover", (event) => {
+    if (!draggingPaneId) {
+      return;
+    }
+    event.preventDefault();
+  });
+
+  dashboardGrid.addEventListener("drop", (event) => {
+    if (!draggingPaneId) {
+      return;
+    }
+    event.preventDefault();
+    const { col, row } = snapPanePositionFromPointer(draggingPaneId, event.clientX, event.clientY);
+    movePaneToGridPosition(draggingPaneId, col, row);
   });
 }
 
 function updatePaneSize(paneId, colSpan, rowSpan) {
   paneLayout[paneId].colSpan = colSpan;
   paneLayout[paneId].rowSpan = rowSpan;
+  reflowPaneLayout(paneId);
   applyPaneLayout();
 }
 
@@ -260,13 +413,7 @@ function startPaneResize(event) {
   if (!paneId) {
     return;
   }
-  const computedStyles = getComputedStyle(dashboardGrid);
-  const columnGap = Number.parseFloat(computedStyles.columnGap || computedStyles.gap || "0") || 0;
-  const rowGap = Number.parseFloat(computedStyles.rowGap || computedStyles.gap || "0") || 0;
-  const maxColumns = getCurrentGridColumns();
-  const gridRect = dashboardGrid.getBoundingClientRect();
-  const columnWidth = (gridRect.width - columnGap * (maxColumns - 1)) / maxColumns;
-  const rowHeight = Number.parseFloat(computedStyles.gridAutoRows || "120") || 120;
+  const { maxColumns, columnUnit, rowUnit } = getGridMetrics();
 
   activeResizeState = {
     paneId,
@@ -274,8 +421,8 @@ function startPaneResize(event) {
     startY: event.clientY,
     startColSpan: paneLayout[paneId].colSpan,
     startRowSpan: paneLayout[paneId].rowSpan,
-    columnUnit: Math.max(1, columnWidth + columnGap),
-    rowUnit: Math.max(1, rowHeight + rowGap),
+    columnUnit,
+    rowUnit,
     maxColumns
   };
   document.body.classList.add("is-resizing");
@@ -291,12 +438,17 @@ function setupPaneResizers() {
 
 async function initializePaneLayout() {
   paneLayout = await loadPaneLayout();
+  reflowPaneLayout();
   applyPaneLayout();
   setupPaneDragAndDrop();
   setupPaneResizers();
-  window.addEventListener("resize", applyPaneLayout);
+  window.addEventListener("resize", () => {
+    reflowPaneLayout();
+    applyPaneLayout();
+  });
   resetLayoutBtn.addEventListener("click", () => {
     paneLayout = sanitizePaneLayout();
+    reflowPaneLayout();
     applyPaneLayout();
     savePaneLayout().catch(() => {});
   });
