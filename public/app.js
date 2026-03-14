@@ -16,6 +16,7 @@ let refreshTimer = null;
 let eventsSocket = null;
 let logsSocket = null;
 let activeResizeState = null;
+const paneRevealTimers = new WeakMap();
 
 const paneGridColumns = 12;
 const paneDefaultLayout = {
@@ -30,6 +31,33 @@ let paneLayout = sanitizePaneLayout();
 
 function setSystemInfoText(text) {
   systemInfo.textContent = text;
+}
+
+function startPaneLoading(target) {
+  const pane = target?.closest(".dashboard-pane");
+  if (!pane) {
+    return null;
+  }
+  pane.classList.remove("is-revealed");
+  pane.classList.add("is-loading");
+  return pane;
+}
+
+function finishPaneLoading(pane) {
+  if (!pane) {
+    return;
+  }
+  pane.classList.remove("is-loading");
+  pane.classList.add("is-revealed");
+  const existingTimer = paneRevealTimers.get(pane);
+  if (existingTimer) {
+    clearTimeout(existingTimer);
+  }
+  const timerId = setTimeout(() => {
+    pane.classList.remove("is-revealed");
+    paneRevealTimers.delete(pane);
+  }, 280);
+  paneRevealTimers.set(pane, timerId);
 }
 
 function formatBytes(bytes) {
@@ -349,6 +377,7 @@ async function api(path, options = {}) {
 }
 
 async function loadSystemInfo() {
+  const pane = startPaneLoading(systemInfo);
   try {
     const payload = await api("/api/system/info");
     setSystemInfoText(
@@ -356,6 +385,8 @@ async function loadSystemInfo() {
     );
   } catch (error) {
     setSystemInfoText(`Error: ${error.message}`);
+  } finally {
+    finishPaneLoading(pane);
   }
 }
 
@@ -460,6 +491,7 @@ function openLogs(container) {
 }
 
 async function loadContainers() {
+  const pane = startPaneLoading(containersBody);
   try {
     const containers = await api("/api/containers");
     if (containers.length === 0) {
@@ -508,10 +540,13 @@ async function loadContainers() {
     });
   } catch (error) {
     containersBody.innerHTML = `<tr><td colspan="6">Error: ${error.message}</td></tr>`;
+  } finally {
+    finishPaneLoading(pane);
   }
 }
 
 async function loadImages() {
+  const pane = startPaneLoading(imagesBody);
   try {
     const images = await api("/api/images");
     if (images.length === 0) {
@@ -541,6 +576,8 @@ async function loadImages() {
     });
   } catch (error) {
     imagesBody.innerHTML = `<tr><td colspan="6">Error: ${error.message}</td></tr>`;
+  } finally {
+    finishPaneLoading(pane);
   }
 }
 
@@ -566,6 +603,7 @@ function renderHostPerformance(host) {
 }
 
 async function loadPerformance() {
+  const pane = startPaneLoading(hostPerformance);
   try {
     const payload = await api("/api/metrics");
     renderHostPerformance(payload.host);
@@ -605,6 +643,8 @@ async function loadPerformance() {
   } catch (error) {
     hostPerformance.textContent = `Error: ${error.message}`;
     containerPerformanceBody.innerHTML = `<tr><td colspan="6">Error: ${error.message}</td></tr>`;
+  } finally {
+    finishPaneLoading(pane);
   }
 }
 

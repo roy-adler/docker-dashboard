@@ -83,8 +83,57 @@ h2 {
   overflow: hidden;
 }
 
+.dashboard-pane > :not(.pane-header):not(.pane-resize-handle) {
+  transition: opacity 180ms ease, transform 220ms ease;
+}
+
 .dashboard-pane.dragging {
   opacity: 0.55;
+}
+
+.dashboard-pane.is-loading > :not(.pane-header):not(.pane-resize-handle) {
+  opacity: 0.5;
+}
+
+.dashboard-pane.is-revealed > :not(.pane-header):not(.pane-resize-handle) {
+  animation: pane-content-reveal 260ms ease;
+}
+
+.loading-row td {
+  color: var(--muted);
+}
+
+.loading-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+}
+
+.loading-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-top-color: var(--accent);
+  animation: loading-spin 900ms linear infinite;
+}
+
+@keyframes loading-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@keyframes pane-content-reveal {
+  0% {
+    opacity: 0.2;
+    transform: translateY(5px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .dashboard-pane.drop-target {

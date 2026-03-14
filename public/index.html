@@ -26,7 +26,12 @@
           <h2>Docker Engine</h2>
           <button class="pane-drag-handle" type="button" title="Drag to move pane" aria-label="Move Docker Engine pane">Move</button>
         </div>
-        <div id="system-info">Loading system info...</div>
+        <div id="system-info">
+          <span class="loading-inline" role="status" aria-live="polite">
+            <span class="loading-spinner" aria-hidden="true"></span>
+            <span>Loading system info...</span>
+          </span>
+        </div>
         <button class="pane-resize-handle" type="button" title="Drag to resize pane" aria-label="Resize Docker Engine pane"></button>
       </section>
 
@@ -48,8 +53,13 @@
               </tr>
             </thead>
             <tbody id="containers-body">
-              <tr>
-                <td colspan="6">Loading containers...</td>
+              <tr class="loading-row">
+                <td colspan="6">
+                  <span class="loading-inline" role="status" aria-live="polite">
+                    <span class="loading-spinner" aria-hidden="true"></span>
+                    <span>Loading containers...</span>
+                  </span>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -71,7 +81,12 @@
           <h2>Performance</h2>
           <button class="pane-drag-handle" type="button" title="Drag to move pane" aria-label="Move Performance pane">Move</button>
         </div>
-        <div id="host-performance" class="host-performance">Loading host metrics...</div>
+        <div id="host-performance" class="host-performance">
+          <span class="loading-inline" role="status" aria-live="polite">
+            <span class="loading-spinner" aria-hidden="true"></span>
+            <span>Loading host metrics...</span>
+          </span>
+        </div>
         <div class="table-wrap pane-table-wrap">
           <table>
             <thead>
@@ -85,8 +100,13 @@
               </tr>
             </thead>
             <tbody id="container-performance-body">
-              <tr>
-                <td colspan="6">Loading container metrics...</td>
+              <tr class="loading-row">
+                <td colspan="6">
+                  <span class="loading-inline" role="status" aria-live="polite">
+                    <span class="loading-spinner" aria-hidden="true"></span>
+                    <span>Loading container metrics...</span>
+                  </span>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -112,8 +132,13 @@
               </tr>
             </thead>
             <tbody id="images-body">
-              <tr>
-                <td colspan="6">Loading images...</td>
+              <tr class="loading-row">
+                <td colspan="6">
+                  <span class="loading-inline" role="status" aria-live="polite">
+                    <span class="loading-spinner" aria-hidden="true"></span>
+                    <span>Loading images...</span>
+                  </span>
+                </td>
               </tr>
             </tbody>
           </table>
