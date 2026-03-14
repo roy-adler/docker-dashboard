@@ -275,11 +275,11 @@ function getCurrentGridColumns() {
   return Number.isFinite(columns) && columns > 0 ? columns : paneGridColumns;
 }
 
-function applyPaneLayout() {
+function applyPaneLayout(layoutOverride = paneLayout) {
   const currentColumns = getCurrentGridColumns();
   dashboardGrid.querySelectorAll(".dashboard-pane").forEach((pane) => {
     const paneId = pane.dataset.paneId;
-    const layout = paneLayout[paneId] || paneDefaultLayout[paneId];
+    const layout = layoutOverride[paneId] || paneDefaultLayout[paneId];
     const columnSpan = currentColumns === 1 ? 1 : clamp(layout.colSpan, 1, currentColumns);
     const startColumn =
       currentColumns === 1 ? 1 : clamp(layout.col || 1, 1, Math.max(1, currentColumns - columnSpan + 1));
@@ -290,7 +290,7 @@ function applyPaneLayout() {
   });
 }
 
-function reflowPaneLayout(primaryPaneId) {
+function reflowPaneLayout(primaryPaneId, { commit = true } = {}) {
   const maxColumns = getCurrentGridColumns();
   const occupiedCells = new Set();
   const paneIds = Object.keys(paneDefaultLayout).sort((a, b) => {
@@ -328,7 +328,10 @@ function reflowPaneLayout(primaryPaneId) {
     markAreaAsOccupied(occupiedCells, slot.col, slot.row, colSpan, rowSpan);
   });
 
-  paneLayout = reflowed;
+  if (commit) {
+    paneLayout = reflowed;
+  }
+  return reflowed;
 }
 
 function getGridMetrics() {
@@ -557,8 +560,8 @@ async function initializePaneLayout() {
   setupPaneDragAndDrop();
   setupPaneResizers();
   window.addEventListener("resize", () => {
-    reflowPaneLayout();
-    applyPaneLayout();
+    const viewportLayout = reflowPaneLayout(undefined, { commit: false });
+    applyPaneLayout(viewportLayout);
   });
 }
 
