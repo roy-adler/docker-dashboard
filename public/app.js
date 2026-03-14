@@ -21,7 +21,6 @@ const paneRevealTimers = new WeakMap();
 let exposedAppsRequestInFlight = null;
 
 const packagesSourceUrl = "https://dockinfo.royadler.de/packages";
-const packagesBackendTimeoutMs = 7000;
 const packagesFallbackSources = [
   {
     name: "direct",
@@ -671,18 +670,6 @@ async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 6000) {
   }
 }
 
-function toReadableErrorMessage(error, timeoutMs = 0) {
-  if (!error) {
-    return "unknown error";
-  }
-  if (error.name === "AbortError") {
-    return timeoutMs > 0
-      ? `request timed out after ${timeoutMs} ms`
-      : "request timed out";
-  }
-  return String(error.message || error);
-}
-
 function normalizePackagesResponse(data) {
   if (Array.isArray(data)) {
     return data;
@@ -951,24 +938,7 @@ async function loadExposedApps(options = {}) {
   }
   const pane = options.showLoading === false ? null : startPaneLoading(exposedAppsBody);
   exposedAppsRequestInFlight = (async () => {
-    let packages = [];
-    let sourceError = null;
-    try {
-      const response = await fetchJsonWithTimeout(
-        "/api/packages",
-        { headers: { Accept: "application/json" } },
-        packagesBackendTimeoutMs
-      );
-      if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
-        throw new Error(payload.error || `Request failed with status ${response.status}`);
-      }
-      const payload = await response.json();
-      packages = normalizePackagesResponse(payload).map((entry, index) => normalizePackageEntry(entry, index));
-    } catch (error) {
-      sourceError = new Error(toReadableErrorMessage(error, packagesBackendTimeoutMs));
-      packages = await fetchPackagesFromFallbackSources();
-    }
+    const packages = await fetchPackagesFromFallbackSources();
 
     if (packages.length === 0) {
       exposedAppsBody.innerHTML = '<tr><td colspan="3">No exposed apps found.</td></tr>';
@@ -985,13 +955,6 @@ async function loadExposedApps(options = {}) {
       row.appendChild(createExternalLinkCell(entry.githubUrl));
       exposedAppsBody.appendChild(row);
     });
-
-    if (sourceError) {
-      // Keep data visible while still signaling degraded path.
-      const warningRow = document.createElement("tr");
-      warningRow.innerHTML = `<td colspan="3">Note: backend source timed out/unavailable, using direct/proxy fallback (${sourceError.message}).</td>`;
-      exposedAppsBody.prepend(warningRow);
-    }
   })()
     .catch((error) => {
       exposedAppsBody.innerHTML = `<tr><td colspan="3">Error: ${error.message}</td></tr>`;

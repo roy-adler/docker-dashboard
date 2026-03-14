@@ -1,5 +1,4 @@
 import http from "node:http";
-import https from "node:https";
 import crypto from "node:crypto";
 import os from "node:os";
 import { URL, fileURLToPath } from "node:url";
@@ -34,11 +33,6 @@ let previousAggregateSample = null;
 let previousHostCpuTimes = null;
 const dashboardFaviconPath = fileURLToPath(new URL("./public/docker-dashboard.svg", import.meta.url));
 const layoutStorePath = process.env.LAYOUT_STORE_PATH || "/data/layout.json";
-const packagesSourceUrl = process.env.PACKAGES_SOURCE_URL || "https://dockinfo.royadler.de/packages";
-const packagesFetchTimeoutMs = Math.max(1000, Number(process.env.PACKAGES_FETCH_TIMEOUT_MS || 5000));
-const packagesFetchRetries = Math.max(1, Number(process.env.PACKAGES_FETCH_RETRIES || 2));
-let cachedPackagesPayload = null;
-let cachedPackagesFetchedAt = 0;
 
 async function readStoredLayout() {
   try {
@@ -320,95 +314,6 @@ function parseContainerStats(stats, previousSample, nowMs) {
   };
 }
 
-function formatFetchError(error) {
-  const message = String(error?.message || "fetch failed");
-  const causeCode = String(error?.cause?.code || "").trim();
-  const directCode = String(error?.code || "").trim();
-  if (causeCode) {
-    return `${message} (${causeCode})`;
-  }
-  if (directCode) {
-    return `${message} (${directCode})`;
-  }
-  return message;
-}
-
-function requestJsonWithFamily(urlString, family, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const url = new URL(urlString);
-    const transport = url.protocol === "http:" ? http : https;
-    const request = transport.request(
-      url,
-      {
-        method: "GET",
-        family,
-        headers: {
-          accept: "application/json",
-          "user-agent": "docker-dashboard/1.0"
-        }
-      },
-      (response) => {
-        const chunks = [];
-        response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-        response.on("end", () => {
-          const body = Buffer.concat(chunks).toString("utf8");
-          const statusCode = Number(response.statusCode || 0);
-          if (statusCode < 200 || statusCode >= 300) {
-            reject(new Error(`upstream responded ${statusCode}`));
-            return;
-          }
-          try {
-            resolve(JSON.parse(body));
-          } catch (error) {
-            reject(new Error(`upstream returned invalid JSON: ${error?.message || "parse error"}`));
-          }
-        });
-      }
-    );
-
-    request.setTimeout(timeoutMs, () => {
-      request.destroy(Object.assign(new Error("upstream request timed out"), { code: "ETIMEDOUT" }));
-    });
-    request.on("error", reject);
-    request.end();
-  });
-}
-
-async function fetchPackagesPayloadFromSource() {
-  let lastError = null;
-  for (let attempt = 1; attempt <= packagesFetchRetries; attempt += 1) {
-    for (const family of [4, 0]) {
-      try {
-        const payload = await requestJsonWithFamily(packagesSourceUrl, family, packagesFetchTimeoutMs);
-        const rawPackages = Array.isArray(payload?.packages) ? payload.packages : [];
-        const packages = rawPackages.map((entry, index) => ({
-          id: String(entry?.id || entry?.name || `pkg-${index}`),
-          name: String(entry?.name || "Unnamed application"),
-          applicationUrl: String(entry?.application_url || ""),
-          githubUrl: String(entry?.github_url || "")
-        }));
-        return {
-          count: Number.isFinite(payload?.count) ? payload.count : packages.length,
-          packages
-        };
-      } catch (error) {
-        lastError = error;
-      }
-    }
-
-    if (attempt < packagesFetchRetries) {
-      await new Promise((resolve) => {
-        setTimeout(resolve, 300 * attempt);
-      });
-    }
-  }
-
-  if (lastError) {
-    throw lastError;
-  }
-  throw new Error("fetch failed");
-}
-
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
@@ -467,28 +372,6 @@ app.get("/api/system/info", async (_req, res) => {
     res.json({ info, version });
   } catch (error) {
     res.status(500).json(formatDockerError(error));
-  }
-});
-
-app.get("/api/packages", async (_req, res) => {
-  try {
-    const normalizedPayload = await fetchPackagesPayloadFromSource();
-    cachedPackagesPayload = normalizedPayload;
-    cachedPackagesFetchedAt = Date.now();
-    res.json(normalizedPayload);
-  } catch (error) {
-    if (cachedPackagesPayload) {
-      res.json({
-        ...cachedPackagesPayload,
-        stale: true,
-        staleAgeSeconds: Math.max(0, Math.round((Date.now() - cachedPackagesFetchedAt) / 1000)),
-        warning: `Using cached package data because upstream fetch failed: ${formatFetchError(error)}`
-      });
-      return;
-    }
-    res.status(502).json({
-      error: `Failed to load package metadata from upstream: ${formatFetchError(error)}`
-    });
   }
 });
 
