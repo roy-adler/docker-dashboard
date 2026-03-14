@@ -7,12 +7,27 @@ const imagesBody = document.querySelector("#images-body");
 const containerLogs = document.querySelector("#container-logs");
 const logsTarget = document.querySelector("#logs-target");
 const refreshBtn = document.querySelector("#refresh-btn");
+const resetLayoutBtn = document.querySelector("#reset-layout-btn");
 const autoRefreshCheckbox = document.querySelector("#auto-refresh");
 const closeLogsBtn = document.querySelector("#close-logs-btn");
+const dashboardGrid = document.querySelector("#dashboard-grid");
 
 let refreshTimer = null;
 let eventsSocket = null;
 let logsSocket = null;
+let activeResizeState = null;
+
+const paneLayoutStorageKey = "docker-dashboard-layout-v1";
+const paneGridColumns = 12;
+const paneDefaultLayout = {
+  system: { order: 0, colSpan: 4, rowSpan: 1 },
+  containers: { order: 1, colSpan: 8, rowSpan: 4 },
+  events: { order: 2, colSpan: 4, rowSpan: 3 },
+  performance: { order: 3, colSpan: 8, rowSpan: 3 },
+  images: { order: 4, colSpan: 6, rowSpan: 3 },
+  logs: { order: 5, colSpan: 6, rowSpan: 3 }
+};
+let paneLayout = loadPaneLayout();
 
 function setSystemInfoText(text) {
   systemInfo.textContent = text;
@@ -55,6 +70,208 @@ function appendLog(target, line, maxLines = 500) {
   const lines = combined.split("\n");
   target.textContent = lines.slice(Math.max(0, lines.length - maxLines)).join("\n");
   target.scrollTop = target.scrollHeight;
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function sanitizePaneLayout(layout = {}) {
+  return Object.fromEntries(
+    Object.entries(paneDefaultLayout).map(([paneId, defaults]) => {
+      const entry = layout[paneId] || {};
+      return [
+        paneId,
+        {
+          order: Number.isFinite(entry.order) ? clamp(Math.round(entry.order), 0, 99) : defaults.order,
+          colSpan: Number.isFinite(entry.colSpan)
+            ? clamp(Math.round(entry.colSpan), 1, paneGridColumns)
+            : defaults.colSpan,
+          rowSpan: Number.isFinite(entry.rowSpan) ? clamp(Math.round(entry.rowSpan), 1, 8) : defaults.rowSpan
+        }
+      ];
+    })
+  );
+}
+
+function loadPaneLayout() {
+  try {
+    const raw = localStorage.getItem(paneLayoutStorageKey);
+    if (!raw) {
+      return sanitizePaneLayout();
+    }
+    return sanitizePaneLayout(JSON.parse(raw));
+  } catch {
+    return sanitizePaneLayout();
+  }
+}
+
+function savePaneLayout() {
+  localStorage.setItem(paneLayoutStorageKey, JSON.stringify(paneLayout));
+}
+
+function getCurrentGridColumns() {
+  const columns = getComputedStyle(dashboardGrid).gridTemplateColumns.split(" ").length;
+  return Number.isFinite(columns) && columns > 0 ? columns : paneGridColumns;
+}
+
+function applyPaneLayout() {
+  const currentColumns = getCurrentGridColumns();
+  dashboardGrid.querySelectorAll(".dashboard-pane").forEach((pane) => {
+    const paneId = pane.dataset.paneId;
+    const layout = paneLayout[paneId] || paneDefaultLayout[paneId];
+    const columnSpan = currentColumns === 1 ? 1 : clamp(layout.colSpan, 1, currentColumns);
+    pane.style.order = String(layout.order);
+    pane.style.gridColumn = `span ${columnSpan}`;
+    pane.style.gridRow = `span ${layout.rowSpan}`;
+  });
+}
+
+function getOrderedPaneIds() {
+  return [...dashboardGrid.querySelectorAll(".dashboard-pane")]
+    .sort((a, b) => Number(a.style.order || 0) - Number(b.style.order || 0))
+    .map((pane) => pane.dataset.paneId);
+}
+
+function movePaneBefore(sourcePaneId, targetPaneId) {
+  if (sourcePaneId === targetPaneId) {
+    return;
+  }
+  const paneIds = getOrderedPaneIds();
+  const sourceIndex = paneIds.indexOf(sourcePaneId);
+  const targetIndex = paneIds.indexOf(targetPaneId);
+  if (sourceIndex < 0 || targetIndex < 0) {
+    return;
+  }
+  paneIds.splice(targetIndex, 0, paneIds.splice(sourceIndex, 1)[0]);
+  paneIds.forEach((paneId, index) => {
+    paneLayout[paneId].order = index;
+  });
+  applyPaneLayout();
+  savePaneLayout();
+}
+
+function setupPaneDragAndDrop() {
+  let draggingPaneId = null;
+
+  dashboardGrid.querySelectorAll(".pane-drag-handle").forEach((handle) => {
+    handle.draggable = true;
+    handle.addEventListener("dragstart", (event) => {
+      const pane = event.currentTarget.closest(".dashboard-pane");
+      draggingPaneId = pane?.dataset.paneId || null;
+      if (!draggingPaneId || !event.dataTransfer) {
+        return;
+      }
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", draggingPaneId);
+      pane.classList.add("dragging");
+    });
+    handle.addEventListener("dragend", () => {
+      draggingPaneId = null;
+      dashboardGrid.querySelectorAll(".dashboard-pane").forEach((pane) => {
+        pane.classList.remove("dragging", "drop-target");
+      });
+    });
+  });
+
+  dashboardGrid.querySelectorAll(".dashboard-pane").forEach((pane) => {
+    pane.addEventListener("dragover", (event) => {
+      if (!draggingPaneId || pane.dataset.paneId === draggingPaneId) {
+        return;
+      }
+      event.preventDefault();
+      pane.classList.add("drop-target");
+    });
+    pane.addEventListener("dragleave", () => {
+      pane.classList.remove("drop-target");
+    });
+    pane.addEventListener("drop", (event) => {
+      if (!draggingPaneId) {
+        return;
+      }
+      event.preventDefault();
+      const targetPaneId = pane.dataset.paneId;
+      pane.classList.remove("drop-target");
+      movePaneBefore(draggingPaneId, targetPaneId);
+    });
+  });
+}
+
+function updatePaneSize(paneId, colSpan, rowSpan) {
+  paneLayout[paneId].colSpan = colSpan;
+  paneLayout[paneId].rowSpan = rowSpan;
+  applyPaneLayout();
+}
+
+function handleResizeMove(event) {
+  if (!activeResizeState) {
+    return;
+  }
+  const { paneId, startX, startY, startColSpan, startRowSpan, columnUnit, rowUnit, maxColumns } =
+    activeResizeState;
+  const deltaColumns = Math.round((event.clientX - startX) / columnUnit);
+  const deltaRows = Math.round((event.clientY - startY) / rowUnit);
+  const colSpan = clamp(startColSpan + deltaColumns, 1, maxColumns);
+  const rowSpan = clamp(startRowSpan + deltaRows, 1, 8);
+  updatePaneSize(paneId, colSpan, rowSpan);
+}
+
+function stopPaneResize() {
+  if (!activeResizeState) {
+    return;
+  }
+  savePaneLayout();
+  activeResizeState = null;
+  document.body.classList.remove("is-resizing");
+  window.removeEventListener("pointermove", handleResizeMove);
+  window.removeEventListener("pointerup", stopPaneResize);
+}
+
+function startPaneResize(event) {
+  const pane = event.currentTarget.closest(".dashboard-pane");
+  const paneId = pane?.dataset.paneId;
+  if (!paneId) {
+    return;
+  }
+  const computedStyles = getComputedStyle(dashboardGrid);
+  const columnGap = Number.parseFloat(computedStyles.columnGap || computedStyles.gap || "0") || 0;
+  const rowGap = Number.parseFloat(computedStyles.rowGap || computedStyles.gap || "0") || 0;
+  const maxColumns = getCurrentGridColumns();
+  const gridRect = dashboardGrid.getBoundingClientRect();
+  const columnWidth = (gridRect.width - columnGap * (maxColumns - 1)) / maxColumns;
+  const rowHeight = Number.parseFloat(computedStyles.gridAutoRows || "120") || 120;
+
+  activeResizeState = {
+    paneId,
+    startX: event.clientX,
+    startY: event.clientY,
+    startColSpan: paneLayout[paneId].colSpan,
+    startRowSpan: paneLayout[paneId].rowSpan,
+    columnUnit: Math.max(1, columnWidth + columnGap),
+    rowUnit: Math.max(1, rowHeight + rowGap),
+    maxColumns
+  };
+  document.body.classList.add("is-resizing");
+  window.addEventListener("pointermove", handleResizeMove);
+  window.addEventListener("pointerup", stopPaneResize);
+}
+
+function setupPaneResizers() {
+  dashboardGrid.querySelectorAll(".pane-resize-handle").forEach((handle) => {
+    handle.addEventListener("pointerdown", startPaneResize);
+  });
+}
+
+function initializePaneLayout() {
+  applyPaneLayout();
+  setupPaneDragAndDrop();
+  setupPaneResizers();
+  window.addEventListener("resize", applyPaneLayout);
+  resetLayoutBtn.addEventListener("click", () => {
+    paneLayout = sanitizePaneLayout();
+    applyPaneLayout();
+    savePaneLayout();
+  });
 }
 
 function formatPorts(ports) {
@@ -451,6 +668,7 @@ closeLogsBtn.addEventListener("click", () => {
   logsTarget.textContent = "No container selected";
 });
 
+initializePaneLayout();
 loadContainers();
 loadImages();
 loadSystemInfo();
