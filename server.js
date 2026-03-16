@@ -5,6 +5,8 @@ import { URL, fileURLToPath } from "node:url";
 import path from "node:path";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import express from "express";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 import Docker from "dockerode";
 import { WebSocketServer } from "ws";
 
@@ -16,7 +18,22 @@ const docker = new Docker({
   socketPath: process.env.DOCKER_SOCKET || "/var/run/docker.sock"
 });
 
-app.use(express.json());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:"],
+      connectSrc: ["'self'", "wss:", "ws:", "https://dockinfo.royadler.de"],
+      fontSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      frameAncestors: ["'none'"]
+    }
+  },
+  crossOriginEmbedderPolicy: false
+}));
+app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: false }));
 
 const dashboardPassword = process.env.DASHBOARD_PASSWORD;
@@ -26,8 +43,24 @@ if (!dashboardPassword) {
 }
 
 const sessionCookieName = "dd_session";
+const csrfCookieName = "dd_csrf";
 const sessionTtlMinutes = Math.max(1, Number(process.env.AUTH_SESSION_TTL_MINUTES || 30));
 const sessionSecret = process.env.AUTH_SESSION_SECRET || dashboardPassword;
+
+if (!process.env.AUTH_SESSION_SECRET) {
+  console.warn(
+    "Warning: AUTH_SESSION_SECRET not set, falling back to DASHBOARD_PASSWORD for session signing. " +
+    "Set a separate AUTH_SESSION_SECRET for better security."
+  );
+}
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many login attempts, please try again later" }
+});
 const previousContainerSamples = new Map();
 let previousAggregateSample = null;
 let previousHostCpuTimes = null;
@@ -124,29 +157,51 @@ function isAuthenticatedFromCookieHeader(cookieHeader) {
   return isValidSessionToken(cookies[sessionCookieName]);
 }
 
+function generateCsrfToken() {
+  return crypto.randomBytes(32).toString("hex");
+}
+
 function setSessionCookie(res, req) {
   const token = createSessionToken();
+  const csrfToken = generateCsrfToken();
   const maxAgeSeconds = sessionTtlMinutes * 60;
   const isSecure =
     req.secure || String(req.headers["x-forwarded-proto"] || "").toLowerCase() === "https";
-  const parts = [
+  const sessionParts = [
     `${sessionCookieName}=${encodeURIComponent(token)}`,
     `Max-Age=${maxAgeSeconds}`,
     "Path=/",
     "HttpOnly",
     "SameSite=Lax"
   ];
+  const csrfParts = [
+    `${csrfCookieName}=${csrfToken}`,
+    `Max-Age=${maxAgeSeconds}`,
+    "Path=/",
+    "SameSite=Lax"
+  ];
   if (isSecure) {
-    parts.push("Secure");
+    sessionParts.push("Secure");
+    csrfParts.push("Secure");
   }
-  res.setHeader("Set-Cookie", parts.join("; "));
+  res.setHeader("Set-Cookie", [sessionParts.join("; "), csrfParts.join("; ")]);
 }
 
 function clearSessionCookie(res) {
-  res.setHeader(
-    "Set-Cookie",
-    `${sessionCookieName}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax`
-  );
+  res.setHeader("Set-Cookie", [
+    `${sessionCookieName}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax`,
+    `${csrfCookieName}=; Max-Age=0; Path=/; SameSite=Lax`
+  ]);
+}
+
+function verifyCsrfToken(req) {
+  const cookies = parseCookies(req.headers.cookie);
+  const cookieToken = cookies[csrfCookieName];
+  const headerToken = req.headers["x-csrf-token"];
+  if (!cookieToken || !headerToken) {
+    return false;
+  }
+  return timingSafeEqual(cookieToken, headerToken);
 }
 
 function renderLoginPage(hasError) {
@@ -327,7 +382,7 @@ app.get("/login", (req, res) => {
   res.type("html").send(renderLoginPage(hasError));
 });
 
-app.post("/auth/login", (req, res) => {
+app.post("/auth/login", loginLimiter, (req, res) => {
   const submittedPassword = String(req.body?.password || "");
   if (!timingSafeEqual(submittedPassword, dashboardPassword)) {
     res.redirect("/login?error=1");
@@ -362,6 +417,23 @@ app.use((req, res, next) => {
     return;
   }
   res.redirect("/login");
+});
+
+app.use((req, res, next) => {
+  const method = req.method;
+  if (method === "GET" || method === "HEAD" || method === "OPTIONS") {
+    next();
+    return;
+  }
+  if (req.path === "/auth/login" || req.path === "/auth/logout") {
+    next();
+    return;
+  }
+  if (!verifyCsrfToken(req)) {
+    res.status(403).json({ error: "Invalid CSRF token" });
+    return;
+  }
+  next();
 });
 
 app.use(express.static("public"));
@@ -458,12 +530,13 @@ app.delete("/api/containers/:id", async (req, res) => {
 
 app.get("/api/containers/:id/logs", async (req, res) => {
   try {
-    const tail = Number(req.query.tail || 300);
+    const rawTail = Number(req.query.tail || 300);
+    const tail = Number.isNaN(rawTail) ? 300 : Math.min(Math.max(1, rawTail), 10000);
     const logsStream = await docker.getContainer(req.params.id).logs({
       stdout: true,
       stderr: true,
       timestamps: true,
-      tail: Number.isNaN(tail) ? 300 : tail
+      tail
     });
     res.type("text/plain").send(logsStream.toString("utf8"));
   } catch (error) {
@@ -634,11 +707,12 @@ wss.on("connection", async (socket, request) => {
 
     let stream;
     try {
+      const wsTail = Math.min(Math.max(1, Number(requestUrl.searchParams.get("tail") || 200)), 10000);
       stream = await docker.getContainer(id).logs({
         stdout: true,
         stderr: true,
         follow: true,
-        tail: Number(requestUrl.searchParams.get("tail") || 200),
+        tail: Number.isNaN(wsTail) ? 200 : wsTail,
         timestamps: true
       });
     } catch (error) {

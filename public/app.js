@@ -26,16 +26,6 @@ const packagesFallbackSources = [
     name: "direct",
     url: () => packagesSourceUrl,
     parseMode: "json"
-  },
-  {
-    name: "allorigins-raw",
-    url: () => `https://api.allorigins.win/raw?url=${encodeURIComponent(packagesSourceUrl)}`,
-    parseMode: "json"
-  },
-  {
-    name: "allorigins-get",
-    url: () => `https://api.allorigins.win/get?url=${encodeURIComponent(packagesSourceUrl)}`,
-    parseMode: "allorigins"
   }
 ];
 
@@ -60,6 +50,17 @@ const paneDragIconSvg = `
 paneDragHandles.forEach((handle) => {
   handle.innerHTML = paneDragIconSvg;
 });
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = String(str);
+  return div.innerHTML;
+}
+
+function getCsrfToken() {
+  const match = document.cookie.match(/(?:^|;\s*)dd_csrf=([^;]*)/);
+  return match ? decodeURIComponent(match[1]) : "";
+}
 
 function setSystemInfoText(text) {
   systemInfo.textContent = text;
@@ -641,9 +642,14 @@ function createExternalLinkCell(value) {
 }
 
 async function api(path, options = {}) {
+  const headers = { "Content-Type": "application/json", ...options.headers };
+  const method = (options.method || "GET").toUpperCase();
+  if (method !== "GET" && method !== "HEAD") {
+    headers["X-CSRF-Token"] = getCsrfToken();
+  }
   const response = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...options
+    ...options,
+    headers
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
@@ -854,10 +860,10 @@ async function loadContainers(options = {}) {
     containers.forEach((container) => {
       const row = document.createElement("tr");
       row.innerHTML = `
-        <td>${container.names[0] || container.shortId}</td>
-        <td>${container.image}</td>
-        <td>${container.state}</td>
-        <td>${container.status}</td>
+        <td>${escapeHtml(container.names[0] || container.shortId)}</td>
+        <td>${escapeHtml(container.image)}</td>
+        <td>${escapeHtml(container.state)}</td>
+        <td>${escapeHtml(container.status)}</td>
         <td class="ports-cell"></td>
         <td class="actions container-actions"></td>
       `;
@@ -890,7 +896,7 @@ async function loadContainers(options = {}) {
       containersBody.appendChild(row);
     });
   } catch (error) {
-    containersBody.innerHTML = `<tr><td colspan="6">Error: ${error.message}</td></tr>`;
+    containersBody.innerHTML = `<tr><td colspan="6">Error: ${escapeHtml(error.message)}</td></tr>`;
   } finally {
     finishPaneLoading(pane);
   }
@@ -909,11 +915,11 @@ async function loadImages(options = {}) {
     images.forEach((image) => {
       const row = document.createElement("tr");
       row.innerHTML = `
-        <td>${image.tags.join(", ")}</td>
-        <td>${image.shortId}</td>
-        <td>${formatDateTime(image.created)}</td>
-        <td>${formatBytes(image.size)}</td>
-        <td>${image.containers}</td>
+        <td>${escapeHtml(image.tags.join(", "))}</td>
+        <td>${escapeHtml(image.shortId)}</td>
+        <td>${escapeHtml(formatDateTime(image.created))}</td>
+        <td>${escapeHtml(formatBytes(image.size))}</td>
+        <td>${escapeHtml(String(image.containers))}</td>
         <td class="actions"></td>
       `;
 
@@ -926,7 +932,7 @@ async function loadImages(options = {}) {
       imagesBody.appendChild(row);
     });
   } catch (error) {
-    imagesBody.innerHTML = `<tr><td colspan="6">Error: ${error.message}</td></tr>`;
+    imagesBody.innerHTML = `<tr><td colspan="6">Error: ${escapeHtml(error.message)}</td></tr>`;
   } finally {
     finishPaneLoading(pane);
   }
@@ -957,7 +963,7 @@ async function loadExposedApps(options = {}) {
     });
   })()
     .catch((error) => {
-      exposedAppsBody.innerHTML = `<tr><td colspan="3">Error: ${error.message}</td></tr>`;
+      exposedAppsBody.innerHTML = `<tr><td colspan="3">Error: ${escapeHtml(error.message)}</td></tr>`;
     })
     .finally(() => {
       finishPaneLoading(pane);
@@ -1005,7 +1011,7 @@ async function loadPerformance(options = {}) {
       const metrics = container.metrics;
       if (!metrics) {
         row.innerHTML = `
-          <td>${container.name}</td>
+          <td>${escapeHtml(container.name)}</td>
           <td>-</td>
           <td>-</td>
           <td>-</td>
@@ -1017,18 +1023,18 @@ async function loadPerformance(options = {}) {
       }
 
       row.innerHTML = `
-        <td>${container.name}</td>
-        <td>${formatPercent(metrics.cpuPercent)}</td>
-        <td>${formatPercent(metrics.memoryPercent)} (${formatBytes(metrics.memoryUsage)})</td>
-        <td>${formatBytes(metrics.network.rxBytes)} / ${formatBytes(metrics.network.txBytes)}</td>
-        <td>${formatRate(metrics.network.rxRate)} / ${formatRate(metrics.network.txRate)}</td>
-        <td>${formatBytes(metrics.disk.readBytes)} / ${formatBytes(metrics.disk.writeBytes)}</td>
+        <td>${escapeHtml(container.name)}</td>
+        <td>${escapeHtml(formatPercent(metrics.cpuPercent))}</td>
+        <td>${escapeHtml(formatPercent(metrics.memoryPercent))} (${escapeHtml(formatBytes(metrics.memoryUsage))})</td>
+        <td>${escapeHtml(formatBytes(metrics.network.rxBytes))} / ${escapeHtml(formatBytes(metrics.network.txBytes))}</td>
+        <td>${escapeHtml(formatRate(metrics.network.rxRate))} / ${escapeHtml(formatRate(metrics.network.txRate))}</td>
+        <td>${escapeHtml(formatBytes(metrics.disk.readBytes))} / ${escapeHtml(formatBytes(metrics.disk.writeBytes))}</td>
       `;
       containerPerformanceBody.appendChild(row);
     });
   } catch (error) {
     hostPerformance.textContent = `Error: ${error.message}`;
-    containerPerformanceBody.innerHTML = `<tr><td colspan="6">Error: ${error.message}</td></tr>`;
+    containerPerformanceBody.innerHTML = `<tr><td colspan="6">Error: ${escapeHtml(error.message)}</td></tr>`;
   } finally {
     finishPaneLoading(pane);
   }
