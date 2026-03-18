@@ -207,11 +207,17 @@ h2 {
   border-radius: 3px;
   padding: 0;
   border: 1px solid var(--border);
-  opacity: 0.5;
+  opacity: 0;
   transition: opacity 150ms ease;
+  pointer-events: none;
 }
 
-.pane-resize-handle:hover {
+.pane-resize-handle.is-nearby {
+  opacity: 0.7;
+  pointer-events: auto;
+}
+
+.pane-resize-handle.is-nearby:hover {
   opacity: 1;
 }
 

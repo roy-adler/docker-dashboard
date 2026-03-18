@@ -659,8 +659,10 @@ function startPaneResize(event) {
 
 function setupPaneResizers() {
   const corners = ["tl", "tr", "bl", "br"];
+  const proximityThreshold = 60;
   dashboardGrid.querySelectorAll(".dashboard-pane").forEach((pane) => {
     pane.querySelectorAll(".pane-resize-handle").forEach((h) => h.remove());
+    const handles = {};
     corners.forEach((corner) => {
       const btn = document.createElement("button");
       btn.type = "button";
@@ -668,6 +670,39 @@ function setupPaneResizers() {
       btn.title = "Resize";
       btn.addEventListener("pointerdown", startPaneResize);
       pane.appendChild(btn);
+      handles[corner] = btn;
+    });
+
+    pane.addEventListener("mousemove", (event) => {
+      const rect = pane.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+      const cornerPositions = {
+        tl: { x: 0, y: 0 },
+        tr: { x: rect.width, y: 0 },
+        bl: { x: 0, y: rect.height },
+        br: { x: rect.width, y: rect.height }
+      };
+      let nearest = null;
+      let nearestDist = Infinity;
+      for (const c of corners) {
+        const dx = x - cornerPositions[c].x;
+        const dy = y - cornerPositions[c].y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < nearestDist) {
+          nearestDist = dist;
+          nearest = c;
+        }
+      }
+      for (const c of corners) {
+        handles[c].classList.toggle("is-nearby", c === nearest && nearestDist < proximityThreshold);
+      }
+    });
+
+    pane.addEventListener("mouseleave", () => {
+      for (const c of corners) {
+        handles[c].classList.remove("is-nearby");
+      }
     });
   });
 }
