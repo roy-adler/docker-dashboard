@@ -19,6 +19,10 @@ let activeResizeState = null;
 let activeDragState = null;
 const paneRevealTimers = new WeakMap();
 let exposedAppsRequestInFlight = null;
+let lastActivityTime = Date.now();
+let sessionTtlMs = 30 * 60 * 1000;
+let inactivityCheckTimer = null;
+let isSessionExpired = false;
 
 const packagesSourceUrl = "https://dockinfo.royadler.de/packages";
 const packagesFallbackSources = [
@@ -60,6 +64,85 @@ function escapeHtml(str) {
 function getCsrfToken() {
   const match = document.cookie.match(/(?:^|;\s*)dd_csrf=([^;]*)/);
   return match ? decodeURIComponent(match[1]) : "";
+}
+
+function resetActivityTimer() {
+  lastActivityTime = Date.now();
+}
+
+["mousemove", "mousedown", "keydown", "scroll", "touchstart", "click"].forEach((eventName) => {
+  document.addEventListener(eventName, resetActivityTimer, { passive: true });
+});
+
+function disconnectAllSockets() {
+  if (eventsSocket) {
+    eventsSocket.onclose = null;
+    eventsSocket.close();
+    eventsSocket = null;
+  }
+  if (logsSocket) {
+    logsSocket.close();
+    logsSocket = null;
+  }
+}
+
+function stopAllTimers() {
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+  if (exposedAppsRefreshTimer) {
+    clearInterval(exposedAppsRefreshTimer);
+    exposedAppsRefreshTimer = null;
+  }
+  if (inactivityCheckTimer) {
+    clearInterval(inactivityCheckTimer);
+    inactivityCheckTimer = null;
+  }
+}
+
+function handleSessionExpired() {
+  if (isSessionExpired) {
+    return;
+  }
+  isSessionExpired = true;
+  stopAllTimers();
+  disconnectAllSockets();
+  window.location.href = "/login";
+}
+
+async function logout() {
+  try {
+    await fetch("/auth/logout", { method: "POST" });
+  } catch {
+    // ignore
+  }
+  stopAllTimers();
+  disconnectAllSockets();
+  window.location.href = "/login";
+}
+
+async function loadSessionTtl() {
+  try {
+    const response = await fetch("/api/session/info");
+    if (response.ok) {
+      const data = await response.json();
+      sessionTtlMs = data.ttlMinutes * 60 * 1000;
+    }
+  } catch {
+    // use default
+  }
+}
+
+function startInactivityCheck() {
+  if (inactivityCheckTimer) {
+    clearInterval(inactivityCheckTimer);
+  }
+  inactivityCheckTimer = setInterval(() => {
+    if (Date.now() - lastActivityTime > sessionTtlMs) {
+      handleSessionExpired();
+    }
+  }, 10000);
 }
 
 function setSystemInfoText(text) {
@@ -651,6 +734,10 @@ async function api(path, options = {}) {
     ...options,
     headers
   });
+  if (response.status === 401) {
+    handleSessionExpired();
+    throw new Error("Session expired");
+  }
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
     throw new Error(payload.error || `Request failed with status ${response.status}`);
@@ -1061,6 +1148,9 @@ function connectEvents() {
     }
   };
   eventsSocket.onclose = () => {
+    if (isSessionExpired) {
+      return;
+    }
     appendLog(eventsLog, "[event stream disconnected, retrying...]");
     setTimeout(connectEvents, 2000);
   };
@@ -1093,6 +1183,12 @@ closeLogsBtn.addEventListener("click", () => {
     logsSocket = null;
   }
   logsTarget.textContent = "No container selected";
+});
+
+document.querySelector("#logout-btn").addEventListener("click", logout);
+
+loadSessionTtl().then(() => {
+  startInactivityCheck();
 });
 
 initializePaneLayout();

@@ -12,7 +12,10 @@
       <section class="card system-card dashboard-pane" data-pane-id="system">
         <div class="pane-header">
           <h2>Docker Engine</h2>
-          <button class="pane-drag-handle" type="button" title="Drag to move pane" aria-label="Move Docker Engine pane">↕↔</button>
+          <div class="pane-header-actions">
+            <button id="logout-btn" type="button" title="Log out">Logout</button>
+            <button class="pane-drag-handle" type="button" title="Drag to move pane" aria-label="Move Docker Engine pane">↕↔</button>
+          </div>
         </div>
         <div id="system-info">
           <span class="loading-inline" role="status" aria-live="polite">

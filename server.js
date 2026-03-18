@@ -44,7 +44,9 @@ if (!dashboardPassword) {
 
 const sessionCookieName = "dd_session";
 const csrfCookieName = "dd_csrf";
+const rememberCookieName = "dd_remember";
 const sessionTtlMinutes = Math.max(1, Number(process.env.AUTH_SESSION_TTL_MINUTES || 30));
+const rememberTtlDays = Math.max(1, Number(process.env.AUTH_REMEMBER_TTL_DAYS || 30));
 const sessionSecret = process.env.AUTH_SESSION_SECRET || dashboardPassword;
 
 if (!process.env.AUTH_SESSION_SECRET) {
@@ -152,6 +154,31 @@ function isValidSessionToken(token) {
   return Number.isFinite(expiresAt) && expiresAt > Date.now();
 }
 
+function createRememberToken() {
+  const expiresAt = Date.now() + rememberTtlDays * 24 * 60 * 60 * 1000;
+  const randomId = crypto.randomBytes(32).toString("hex");
+  const payload = `${expiresAt}.${randomId}`;
+  const signature = signValue(payload);
+  return `${payload}.${signature}`;
+}
+
+function isValidRememberToken(token) {
+  if (!token) {
+    return false;
+  }
+  const parts = token.split(".");
+  if (parts.length !== 3) {
+    return false;
+  }
+  const [expiresAtRaw, randomId, signature] = parts;
+  const expected = signValue(`${expiresAtRaw}.${randomId}`);
+  if (!timingSafeEqual(signature, expected)) {
+    return false;
+  }
+  const expiresAt = Number(expiresAtRaw);
+  return Number.isFinite(expiresAt) && expiresAt > Date.now();
+}
+
 function isAuthenticatedFromCookieHeader(cookieHeader) {
   const cookies = parseCookies(cookieHeader);
   return isValidSessionToken(cookies[sessionCookieName]);
@@ -187,10 +214,60 @@ function setSessionCookie(res, req) {
   res.setHeader("Set-Cookie", [sessionParts.join("; "), csrfParts.join("; ")]);
 }
 
+function refreshSessionCookie(res, req) {
+  const token = createSessionToken();
+  const maxAgeSeconds = sessionTtlMinutes * 60;
+  const isSecure =
+    req.secure || String(req.headers["x-forwarded-proto"] || "").toLowerCase() === "https";
+  const cookies = parseCookies(req.headers.cookie);
+  const existingCsrf = cookies[csrfCookieName];
+  if (!existingCsrf) {
+    setSessionCookie(res, req);
+    return;
+  }
+  const sessionParts = [
+    `${sessionCookieName}=${encodeURIComponent(token)}`,
+    `Max-Age=${maxAgeSeconds}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax"
+  ];
+  const csrfParts = [
+    `${csrfCookieName}=${existingCsrf}`,
+    `Max-Age=${maxAgeSeconds}`,
+    "Path=/",
+    "SameSite=Lax"
+  ];
+  if (isSecure) {
+    sessionParts.push("Secure");
+    csrfParts.push("Secure");
+  }
+  res.setHeader("Set-Cookie", [sessionParts.join("; "), csrfParts.join("; ")]);
+}
+
+function setRememberCookie(res, req) {
+  const token = createRememberToken();
+  const maxAgeSeconds = rememberTtlDays * 24 * 60 * 60;
+  const isSecure =
+    req.secure || String(req.headers["x-forwarded-proto"] || "").toLowerCase() === "https";
+  const parts = [
+    `${rememberCookieName}=${encodeURIComponent(token)}`,
+    `Max-Age=${maxAgeSeconds}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax"
+  ];
+  if (isSecure) {
+    parts.push("Secure");
+  }
+  return parts.join("; ");
+}
+
 function clearSessionCookie(res) {
   res.setHeader("Set-Cookie", [
     `${sessionCookieName}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax`,
-    `${csrfCookieName}=; Max-Age=0; Path=/; SameSite=Lax`
+    `${csrfCookieName}=; Max-Age=0; Path=/; SameSite=Lax`,
+    `${rememberCookieName}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax`
   ]);
 }
 
@@ -223,6 +300,9 @@ function renderLoginPage(hasError) {
       input, button { display:block; width:100%; border-radius:7px; border:1px solid #475569; background:#0f172a; color:#e2e8f0; padding:10px; }
       button { cursor:pointer; margin-top:10px; background:#0ea5e9; border:none; color:#082f49; font-weight:600; }
       p { color:#94a3b8; font-size:0.9rem; margin:0 0 12px; }
+      .remember-row { display:flex; align-items:center; gap:8px; margin-top:10px; }
+      .remember-row input { width:auto; display:inline; }
+      .remember-row label { font-size:0.85rem; color:#94a3b8; cursor:pointer; }
     </style>
   </head>
   <body>
@@ -231,6 +311,10 @@ function renderLoginPage(hasError) {
       <p>Enter dashboard password</p>
       ${errorHtml}
       <input type="password" name="password" placeholder="Password" required autofocus />
+      <div class="remember-row">
+        <input type="checkbox" name="remember" id="remember" value="1" />
+        <label for="remember">Remember this browser</label>
+      </div>
       <button type="submit">Sign in</button>
     </form>
   </body>
@@ -378,6 +462,12 @@ app.get("/login", (req, res) => {
     res.redirect("/");
     return;
   }
+  const cookies = parseCookies(req.headers.cookie);
+  if (isValidRememberToken(cookies[rememberCookieName])) {
+    setSessionCookie(res, req);
+    res.redirect("/");
+    return;
+  }
   const hasError = req.query.error === "1";
   res.type("html").send(renderLoginPage(hasError));
 });
@@ -389,6 +479,12 @@ app.post("/auth/login", loginLimiter, (req, res) => {
     return;
   }
   setSessionCookie(res, req);
+  const wantRemember = req.body?.remember === "1";
+  if (wantRemember) {
+    const existing = res.getHeader("Set-Cookie") || [];
+    const rememberPart = setRememberCookie(res, req);
+    res.setHeader("Set-Cookie", [...(Array.isArray(existing) ? existing : [existing]), rememberPart]);
+  }
   res.redirect("/");
 });
 
@@ -401,13 +497,29 @@ app.get("/favicon.svg", (_req, res) => {
   res.type("image/svg+xml").sendFile(dashboardFaviconPath);
 });
 
+app.get("/api/session/info", (req, res) => {
+  if (!isAuthenticatedFromCookieHeader(req.headers.cookie)) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  res.json({ ttlMinutes: sessionTtlMinutes });
+});
+
 app.use((req, res, next) => {
-  if (req.path === "/login" || req.path === "/auth/login" || req.path === "/api/health") {
+  if (req.path === "/login" || req.path === "/auth/login" || req.path === "/api/health" || req.path === "/api/session/info") {
     next();
     return;
   }
 
   if (isAuthenticatedFromCookieHeader(req.headers.cookie)) {
+    refreshSessionCookie(res, req);
+    next();
+    return;
+  }
+
+  const cookies = parseCookies(req.headers.cookie);
+  if (isValidRememberToken(cookies[rememberCookieName])) {
+    setSessionCookie(res, req);
     next();
     return;
   }
