@@ -1191,6 +1191,10 @@ loadSessionTtl().then(() => {
   startInactivityCheck();
 });
 
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").catch(() => {});
+}
+
 initializePaneLayout();
 loadContainers();
 loadImages();
