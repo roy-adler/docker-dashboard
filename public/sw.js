@@ -1,4 +1,4 @@
-const CACHE_NAME = "docker-dashboard-v1";
+const CACHE_NAME = "docker-dashboard-v2";
 const STATIC_ASSETS = [
   "/",
   "/styles.css",

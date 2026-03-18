@@ -570,25 +570,42 @@ function handleResizeMove(event) {
     startX,
     startY,
     startCol,
+    startRow,
     startColSpan,
     startRowSpan,
     columnUnit,
     rowUnit,
     maxColumns,
-    edge
+    corner
   } = activeResizeState;
   const deltaColumns = Math.round((event.clientX - startX) / columnUnit);
   const deltaRows = Math.round((event.clientY - startY) / rowUnit);
+
   let col = startCol;
-  let colSpan = clamp(startColSpan + deltaColumns, 1, maxColumns);
-  if (edge === "left") {
+  let colSpan;
+  let row = startRow;
+  let rowSpan;
+
+  if (corner.includes("l")) {
     const rightEdge = startCol + startColSpan - 1;
     const nextLeft = clamp(startCol + deltaColumns, 1, rightEdge);
     col = nextLeft;
     colSpan = clamp(rightEdge - nextLeft + 1, 1, maxColumns);
+  } else {
+    colSpan = clamp(startColSpan + deltaColumns, 1, maxColumns);
   }
-  const rowSpan = clamp(startRowSpan + deltaRows, 1, 8);
+
+  if (corner.includes("t")) {
+    const bottomEdge = startRow + startRowSpan - 1;
+    const nextTop = clamp(startRow + deltaRows, 1, bottomEdge);
+    row = nextTop;
+    rowSpan = clamp(bottomEdge - nextTop + 1, 1, 8);
+  } else {
+    rowSpan = clamp(startRowSpan + deltaRows, 1, 8);
+  }
+
   paneLayout[paneId].col = col;
+  paneLayout[paneId].row = row;
   updatePaneSize(paneId, colSpan, rowSpan);
 }
 
@@ -610,7 +627,15 @@ function startPaneResize(event) {
   if (!paneId) {
     return;
   }
-  const isLeftHandle = event.currentTarget.classList.contains("pane-resize-handle-left");
+  const classList = event.currentTarget.classList;
+  let corner = "br";
+  if (classList.contains("pane-resize-corner-tl")) {
+    corner = "tl";
+  } else if (classList.contains("pane-resize-corner-tr")) {
+    corner = "tr";
+  } else if (classList.contains("pane-resize-corner-bl")) {
+    corner = "bl";
+  }
   const { maxColumns, columnUnit, rowUnit } = getGridMetrics();
 
   activeResizeState = {
@@ -618,12 +643,13 @@ function startPaneResize(event) {
     startX: event.clientX,
     startY: event.clientY,
     startCol: paneLayout[paneId].col,
+    startRow: paneLayout[paneId].row,
     startColSpan: paneLayout[paneId].colSpan,
     startRowSpan: paneLayout[paneId].rowSpan,
     columnUnit,
     rowUnit,
     maxColumns,
-    edge: isLeftHandle ? "left" : "right"
+    corner
   };
   document.body.classList.add("is-resizing");
   dashboardGrid.classList.add("is-dragging-layout");
@@ -632,8 +658,17 @@ function startPaneResize(event) {
 }
 
 function setupPaneResizers() {
-  dashboardGrid.querySelectorAll(".pane-resize-handle").forEach((handle) => {
-    handle.addEventListener("pointerdown", startPaneResize);
+  const corners = ["tl", "tr", "bl", "br"];
+  dashboardGrid.querySelectorAll(".dashboard-pane").forEach((pane) => {
+    pane.querySelectorAll(".pane-resize-handle").forEach((h) => h.remove());
+    corners.forEach((corner) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = `pane-resize-handle pane-resize-corner-${corner}`;
+      btn.title = "Resize";
+      btn.addEventListener("pointerdown", startPaneResize);
+      pane.appendChild(btn);
+    });
   });
 }
 
