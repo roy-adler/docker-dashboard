@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker info:*)",
+      "Bash(curl -s -b /tmp/dd-cookies http://localhost:3000/app.js)",
+      "Bash(curl -s -b /tmp/dd-cookies http://localhost:3000/styles.css)",
+      "Bash(kill %1)",
+      "Bash(rm -f /tmp/dd-cookies)"
+    ]
+  }
+}
