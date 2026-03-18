@@ -506,7 +506,10 @@ app.get("/api/session/info", (req, res) => {
 });
 
 app.use((req, res, next) => {
-  if (req.path === "/login" || req.path === "/auth/login" || req.path === "/api/health" || req.path === "/api/session/info") {
+  const publicPaths = ["/login", "/auth/login", "/api/health", "/api/session/info",
+    "/manifest.json", "/sw.js", "/icon-192.png", "/icon-512.png",
+    "/docker-dashboard.svg", "/docker-dashboard.png", "/favicon.svg"];
+  if (publicPaths.includes(req.path)) {
     next();
     return;
   }
