@@ -332,7 +332,11 @@ function sanitizePaneLayout(layout = {}) {
       preferredRow: Number.isFinite(entry.row) ? Math.round(entry.row) : defaults.row
     });
     sanitized[paneId] = { col: slot.col, row: slot.row, colSpan, rowSpan };
-    markAreaAsOccupied(occupiedCells, slot.col, slot.row, colSpan, rowSpan);
+    if (entry.hidden === true) {
+      sanitized[paneId].hidden = true;
+    } else {
+      markAreaAsOccupied(occupiedCells, slot.col, slot.row, colSpan, rowSpan);
+    }
   });
 
   return sanitized;
@@ -368,6 +372,7 @@ function applyPaneLayout(layoutOverride = paneLayout) {
     const startColumn =
       currentColumns === 1 ? 1 : clamp(layout.col || 1, 1, Math.max(1, currentColumns - columnSpan + 1));
     const startRow = clamp(layout.row || 1, 1, 400);
+    pane.classList.toggle("pane-hidden", layout.hidden === true);
     pane.style.order = "";
     pane.style.gridColumn = `${startColumn} / span ${columnSpan}`;
     pane.style.gridRow = `${startRow} / span ${layout.rowSpan}`;
@@ -396,6 +401,7 @@ function reflowPaneLayout(primaryPaneId, { commit = true } = {}) {
   paneIds.forEach((paneId) => {
     const defaults = paneDefaultLayout[paneId];
     const current = paneLayout[paneId] || defaults;
+    const isHidden = current.hidden === true;
     const colSpan = maxColumns === 1 ? 1 : clamp(current.colSpan || defaults.colSpan, 1, maxColumns);
     const rowSpan = clamp(current.rowSpan || defaults.rowSpan, 1, 8);
     const preferredCol = maxColumns === 1 ? 1 : clamp(current.col || defaults.col, 1, maxColumns);
@@ -409,7 +415,11 @@ function reflowPaneLayout(primaryPaneId, { commit = true } = {}) {
       preferredRow
     });
     reflowed[paneId] = { col: slot.col, row: slot.row, colSpan, rowSpan };
-    markAreaAsOccupied(occupiedCells, slot.col, slot.row, colSpan, rowSpan);
+    if (isHidden) {
+      reflowed[paneId].hidden = true;
+    } else {
+      markAreaAsOccupied(occupiedCells, slot.col, slot.row, colSpan, rowSpan);
+    }
   });
 
   if (commit) {
@@ -707,10 +717,134 @@ function setupPaneResizers() {
   });
 }
 
+const paneDisplayNames = {
+  system: "Docker Engine",
+  containers: "Containers",
+  events: "Events",
+  performance: "Performance",
+  images: "Images",
+  logs: "Logs",
+  exposedApps: "Exposed Apps"
+};
+
+function isPaneHidden(paneId) {
+  return paneLayout[paneId]?.hidden === true;
+}
+
+function loadPaneData(paneId) {
+  const loaders = {
+    system: () => loadSystemInfo(),
+    containers: () => loadContainers(),
+    events: () => { if (!eventsSocket) { connectEvents(); } },
+    performance: () => loadPerformance(),
+    images: () => loadImages(),
+    logs: () => {},
+    exposedApps: () => loadExposedApps()
+  };
+  if (loaders[paneId]) {
+    loaders[paneId]();
+  }
+}
+
+function hidePane(paneId) {
+  if (!paneLayout[paneId]) {
+    return;
+  }
+  paneLayout[paneId].hidden = true;
+  if (paneId === "events" && eventsSocket) {
+    eventsSocket.onclose = null;
+    eventsSocket.close();
+    eventsSocket = null;
+  }
+  if (paneId === "logs" && logsSocket) {
+    logsSocket.close();
+    logsSocket = null;
+  }
+  reflowPaneLayout();
+  applyPaneLayout();
+  updateAddPaneToolbar();
+  savePaneLayout().catch(() => {});
+}
+
+function showPane(paneId) {
+  if (!paneLayout[paneId]) {
+    return;
+  }
+  delete paneLayout[paneId].hidden;
+  loadPaneData(paneId);
+  reflowPaneLayout(paneId);
+  applyPaneLayout();
+  updateAddPaneToolbar();
+  savePaneLayout().catch(() => {});
+}
+
+function setupPaneCloseButtons() {
+  dashboardGrid.querySelectorAll(".dashboard-pane").forEach((pane) => {
+    const paneId = pane.dataset.paneId;
+    const header = pane.querySelector(".pane-header");
+    if (!header) {
+      return;
+    }
+    let actions = header.querySelector(".pane-header-actions");
+    if (!actions) {
+      const dragHandle = header.querySelector(".pane-drag-handle");
+      actions = document.createElement("div");
+      actions.className = "pane-header-actions";
+      if (dragHandle) {
+        header.replaceChild(actions, dragHandle);
+        actions.appendChild(dragHandle);
+      } else {
+        header.appendChild(actions);
+      }
+    }
+    const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.className = "pane-close-btn";
+    closeBtn.title = `Hide ${paneDisplayNames[paneId] || paneId}`;
+    closeBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+    closeBtn.addEventListener("click", () => hidePane(paneId));
+    const dragHandle = actions.querySelector(".pane-drag-handle");
+    if (dragHandle) {
+      actions.insertBefore(closeBtn, dragHandle);
+    } else {
+      actions.appendChild(closeBtn);
+    }
+  });
+}
+
+function updateAddPaneToolbar() {
+  const toolbar = document.querySelector("#add-pane-toolbar");
+  if (!toolbar) {
+    return;
+  }
+  const hiddenPaneIds = Object.keys(paneDefaultLayout).filter((id) => isPaneHidden(id));
+  if (hiddenPaneIds.length === 0) {
+    toolbar.style.display = "none";
+    toolbar.innerHTML = "";
+    return;
+  }
+  toolbar.style.display = "";
+  toolbar.innerHTML = "";
+  const label = document.createElement("span");
+  label.className = "add-pane-label";
+  label.textContent = "Add pane:";
+  toolbar.appendChild(label);
+  hiddenPaneIds.forEach((paneId) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "add-pane-btn";
+    btn.textContent = `+ ${paneDisplayNames[paneId] || paneId}`;
+    btn.addEventListener("click", () => showPane(paneId));
+    toolbar.appendChild(btn);
+  });
+}
+
 async function initializePaneLayout() {
   paneLayout = await loadPaneLayout();
   reflowPaneLayout();
   applyPaneLayout();
+  setupPaneCloseButtons();
+  updateAddPaneToolbar();
   setupPaneDragAndDrop();
   setupPaneResizers();
   window.addEventListener("resize", () => {
@@ -1232,10 +1366,10 @@ function setAutoRefresh() {
     refreshTimer = null;
   }
   refreshTimer = setInterval(() => {
-    loadContainers({ showLoading: false });
-    loadImages({ showLoading: false });
-    loadSystemInfo({ showLoading: false });
-    loadPerformance({ showLoading: false });
+    if (!isPaneHidden("containers")) { loadContainers({ showLoading: false }); }
+    if (!isPaneHidden("images")) { loadImages({ showLoading: false }); }
+    if (!isPaneHidden("system")) { loadSystemInfo({ showLoading: false }); }
+    if (!isPaneHidden("performance")) { loadPerformance({ showLoading: false }); }
   }, 5000);
 
   if (exposedAppsRefreshTimer) {
@@ -1243,7 +1377,7 @@ function setAutoRefresh() {
     exposedAppsRefreshTimer = null;
   }
   exposedAppsRefreshTimer = setInterval(() => {
-    loadExposedApps({ showLoading: false });
+    if (!isPaneHidden("exposedApps")) { loadExposedApps({ showLoading: false }); }
   }, 60000);
 }
 
@@ -1265,11 +1399,12 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => {});
 }
 
-initializePaneLayout();
-loadContainers();
-loadImages();
-loadSystemInfo();
-loadPerformance();
-loadExposedApps();
-setAutoRefresh();
-connectEvents();
+initializePaneLayout().then(() => {
+  if (!isPaneHidden("containers")) { loadContainers(); }
+  if (!isPaneHidden("images")) { loadImages(); }
+  if (!isPaneHidden("system")) { loadSystemInfo(); }
+  if (!isPaneHidden("performance")) { loadPerformance(); }
+  if (!isPaneHidden("exposedApps")) { loadExposedApps(); }
+  if (!isPaneHidden("events")) { connectEvents(); }
+  setAutoRefresh();
+});
