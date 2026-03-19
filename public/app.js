@@ -376,8 +376,21 @@ function getAllPaneIds() {
   return [...builtIn, ...custom];
 }
 
+function getNextAvailableRow() {
+  let maxEndRow = 0;
+  Object.values(paneLayout).forEach((l) => {
+    if (!l.hidden) {
+      const endRow = (l.row || 1) + (l.rowSpan || 1);
+      if (endRow > maxEndRow) {
+        maxEndRow = endRow;
+      }
+    }
+  });
+  return Math.max(1, maxEndRow);
+}
+
 function getPaneDefaults(paneId) {
-  return paneDefaultLayout[paneId] || { col: 1, row: 100, colSpan: 6, rowSpan: 2 };
+  return paneDefaultLayout[paneId] || { col: 1, row: getNextAvailableRow(), colSpan: 6, rowSpan: 2 };
 }
 
 function reflowPaneLayout(primaryPaneId, { commit = true } = {}) {
@@ -996,7 +1009,7 @@ function renderCustomPanes() {
     }
     const paneId = `custom-${paneDef.id}`;
     if (!paneLayout[paneId]) {
-      paneLayout[paneId] = { col: 1, row: 100, colSpan: 6, rowSpan: 2 };
+      paneLayout[paneId] = { col: 1, row: getNextAvailableRow(), colSpan: 6, rowSpan: 2 };
     }
     if (paneDef.type === "table" && !isPaneHidden(paneId)) {
       loadCustomTablePane(paneDef);
