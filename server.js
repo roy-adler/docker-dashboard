@@ -26,7 +26,7 @@ app.use(helmet({
       scriptSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:"],
-      connectSrc: ["'self'", "wss:", "ws:", "https://dockinfo.royadler.de"],
+      connectSrc: ["'self'", "wss:", "ws:", "https:"],
       fontSrc: ["'self'"],
       objectSrc: ["'none'"],
       frameAncestors: ["'none'"]
@@ -266,7 +266,7 @@ function refreshSessionCookie(res, req) {
   res.setHeader("Set-Cookie", [sessionParts.join("; "), csrfParts.join("; ")]);
 }
 
-function setRememberCookie(res, req) {
+function setRememberCookie(_res, req) {
   const token = createRememberToken();
   const maxAgeSeconds = rememberTtlDays * 24 * 60 * 60;
   const isSecure =
