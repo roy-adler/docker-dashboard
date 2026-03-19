@@ -819,6 +819,9 @@ function showPane(paneId) {
 
 function setupPaneCloseButtons() {
   dashboardGrid.querySelectorAll(".dashboard-pane").forEach((pane) => {
+    if (pane.querySelector(".pane-close-btn")) {
+      return;
+    }
     const paneId = pane.dataset.paneId;
     const header = pane.querySelector(".pane-header");
     if (!header) {
