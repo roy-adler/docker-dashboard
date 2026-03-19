@@ -3,7 +3,8 @@ import crypto from "node:crypto";
 import os from "node:os";
 import { URL, fileURLToPath } from "node:url";
 import path from "node:path";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, access } from "node:fs/promises";
+import { execFile } from "node:child_process";
 import express from "express";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
@@ -68,6 +69,8 @@ let previousAggregateSample = null;
 let previousHostCpuTimes = null;
 const dashboardFaviconPath = fileURLToPath(new URL("./public/docker-dashboard.svg", import.meta.url));
 const layoutStorePath = process.env.LAYOUT_STORE_PATH || "/data/layout.json";
+const customPanesStorePath = process.env.CUSTOM_PANES_PATH || "/data/custom-panes.json";
+const scriptsDir = path.resolve(process.env.SCRIPTS_DIR || "/scripts");
 
 async function readStoredLayout() {
   try {
@@ -99,6 +102,24 @@ async function writeStoredLayout(layout) {
     ),
     "utf8"
   );
+}
+
+async function readCustomPanes() {
+  try {
+    const contents = await readFile(customPanesStorePath, "utf8");
+    const parsed = JSON.parse(contents);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function writeCustomPanes(panes) {
+  await mkdir(path.dirname(customPanesStorePath), { recursive: true });
+  await writeFile(customPanesStorePath, JSON.stringify(panes, null, 2), "utf8");
 }
 
 function formatDockerError(error) {
@@ -770,6 +791,109 @@ app.get("/api/metrics", async (_req, res) => {
     });
   } catch (error) {
     res.status(500).json(formatDockerError(error));
+  }
+});
+
+app.get("/api/custom-panes", async (_req, res) => {
+  try {
+    res.json(await readCustomPanes());
+  } catch (error) {
+    res.status(500).json({ error: error?.message || "Failed to read custom panes" });
+  }
+});
+
+app.post("/api/custom-panes", async (req, res) => {
+  try {
+    const pane = req.body;
+    if (!pane?.title || !pane?.type) {
+      res.status(400).json({ error: "title and type are required" });
+      return;
+    }
+    pane.id = crypto.randomBytes(4).toString("hex");
+    const panes = await readCustomPanes();
+    panes.push(pane);
+    await writeCustomPanes(panes);
+    res.json(pane);
+  } catch (error) {
+    res.status(500).json({ error: error?.message || "Failed to create custom pane" });
+  }
+});
+
+app.put("/api/custom-panes/:id", async (req, res) => {
+  try {
+    const panes = await readCustomPanes();
+    const index = panes.findIndex((p) => p.id === req.params.id);
+    if (index === -1) {
+      res.status(404).json({ error: "Pane not found" });
+      return;
+    }
+    const updated = { ...req.body, id: req.params.id };
+    panes[index] = updated;
+    await writeCustomPanes(panes);
+    res.json(updated);
+  } catch (error) {
+    res.status(500).json({ error: error?.message || "Failed to update custom pane" });
+  }
+});
+
+app.delete("/api/custom-panes/:id", async (req, res) => {
+  try {
+    const panes = await readCustomPanes();
+    const filtered = panes.filter((p) => p.id !== req.params.id);
+    if (filtered.length === panes.length) {
+      res.status(404).json({ error: "Pane not found" });
+      return;
+    }
+    await writeCustomPanes(filtered);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: error?.message || "Failed to delete custom pane" });
+  }
+});
+
+app.post("/api/run-script", async (req, res) => {
+  const scriptName = String(req.body?.script || "");
+  const args = Array.isArray(req.body?.args) ? req.body.args.map(String) : [];
+
+  if (!scriptName || scriptName.includes("..") || scriptName.includes("/") || scriptName.includes("\\")) {
+    res.status(400).json({ error: "Invalid script name" });
+    return;
+  }
+
+  const scriptPath = path.join(scriptsDir, scriptName);
+  const resolved = path.resolve(scriptPath);
+  if (!resolved.startsWith(scriptsDir + path.sep) && resolved !== scriptsDir) {
+    res.status(400).json({ error: "Invalid script path" });
+    return;
+  }
+
+  try {
+    await access(scriptPath);
+  } catch {
+    res.status(404).json({ error: `Script not found: ${scriptName}` });
+    return;
+  }
+
+  try {
+    const result = await new Promise((resolve, reject) => {
+      execFile(scriptPath, args, { timeout: 30000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+        if (error) {
+          const err = new Error(error.message);
+          err.stdout = stdout || "";
+          err.stderr = stderr || "";
+          reject(err);
+          return;
+        }
+        resolve({ stdout, stderr });
+      });
+    });
+    res.json({ ok: true, stdout: result.stdout, stderr: result.stderr });
+  } catch (error) {
+    res.status(500).json({
+      error: error.message || "Script execution failed",
+      stdout: error.stdout || "",
+      stderr: error.stderr || ""
+    });
   }
 });
 

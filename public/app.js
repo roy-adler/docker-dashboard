@@ -23,6 +23,8 @@ let lastActivityTime = Date.now();
 let sessionTtlMs = 30 * 60 * 1000;
 let inactivityCheckTimer = null;
 let isSessionExpired = false;
+let customPaneDefinitions = [];
+const customPaneTimers = {};
 
 const packagesSourceUrl = "https://dockinfo.royadler.de/packages";
 const packagesFallbackSources = [
@@ -339,6 +341,12 @@ function sanitizePaneLayout(layout = {}) {
     }
   });
 
+  Object.keys(normalizedLayout).forEach((paneId) => {
+    if (!paneDefaultLayout[paneId]) {
+      sanitized[paneId] = { ...normalizedLayout[paneId] };
+    }
+  });
+
   return sanitized;
 }
 
@@ -379,27 +387,43 @@ function applyPaneLayout(layoutOverride = paneLayout) {
   });
 }
 
+function getAllPaneIds() {
+  const builtIn = Object.keys(paneDefaultLayout);
+  const custom = customPaneDefinitions.map((p) => `custom-${p.id}`);
+  return [...builtIn, ...custom];
+}
+
+function getPaneDefaults(paneId) {
+  return paneDefaultLayout[paneId] || { col: 1, row: 100, colSpan: 6, rowSpan: 2 };
+}
+
 function reflowPaneLayout(primaryPaneId, { commit = true } = {}) {
   const maxColumns = getCurrentGridColumns();
   const occupiedCells = new Set();
-  const paneIds = Object.keys(paneDefaultLayout).sort((a, b) => {
+  const allIds = getAllPaneIds();
+  const paneIds = allIds.filter((id) => paneLayout[id]).sort((a, b) => {
     if (a === primaryPaneId) {
       return -1;
     }
     if (b === primaryPaneId) {
       return 1;
     }
-    const layoutA = paneLayout[a] || paneDefaultLayout[a];
-    const layoutB = paneLayout[b] || paneDefaultLayout[b];
+    const layoutA = paneLayout[a] || getPaneDefaults(a);
+    const layoutB = paneLayout[b] || getPaneDefaults(b);
     if (layoutA.row !== layoutB.row) {
       return layoutA.row - layoutB.row;
     }
     return layoutA.col - layoutB.col;
   });
+  allIds.forEach((id) => {
+    if (!paneIds.includes(id)) {
+      paneIds.push(id);
+    }
+  });
 
   const reflowed = {};
   paneIds.forEach((paneId) => {
-    const defaults = paneDefaultLayout[paneId];
+    const defaults = getPaneDefaults(paneId);
     const current = paneLayout[paneId] || defaults;
     const isHidden = current.hidden === true;
     const colSpan = maxColumns === 1 ? 1 : clamp(current.colSpan || defaults.colSpan, 1, maxColumns);
@@ -732,6 +756,14 @@ function isPaneHidden(paneId) {
 }
 
 function loadPaneData(paneId) {
+  if (paneId.startsWith("custom-")) {
+    const defId = paneId.slice(7);
+    const paneDef = customPaneDefinitions.find((p) => p.id === defId);
+    if (paneDef?.type === "table") {
+      loadCustomTablePane(paneDef);
+    }
+    return;
+  }
   const loaders = {
     system: () => loadSystemInfo(),
     containers: () => loadContainers(),
@@ -759,6 +791,13 @@ function hidePane(paneId) {
   if (paneId === "logs" && logsSocket) {
     logsSocket.close();
     logsSocket = null;
+  }
+  if (paneId.startsWith("custom-")) {
+    const defId = paneId.slice(7);
+    if (customPaneTimers[defId]) {
+      clearInterval(customPaneTimers[defId]);
+      delete customPaneTimers[defId];
+    }
   }
   reflowPaneLayout();
   applyPaneLayout();
@@ -812,35 +851,499 @@ function setupPaneCloseButtons() {
   });
 }
 
+async function loadCustomPaneDefinitions() {
+  try {
+    customPaneDefinitions = await api("/api/custom-panes");
+  } catch {
+    customPaneDefinitions = [];
+  }
+}
+
+function createCustomPaneElement(paneDef) {
+  const paneId = `custom-${paneDef.id}`;
+  const pane = document.createElement("section");
+  pane.className = "card dashboard-pane";
+  pane.dataset.paneId = paneId;
+
+  const header = document.createElement("div");
+  header.className = "pane-header";
+  const h2 = document.createElement("h2");
+  h2.textContent = paneDef.title;
+  const actions = document.createElement("div");
+  actions.className = "pane-header-actions";
+
+  const editBtn = document.createElement("button");
+  editBtn.type = "button";
+  editBtn.className = "pane-edit-btn";
+  editBtn.title = "Edit pane";
+  editBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+  editBtn.addEventListener("click", () => openPaneEditor(paneDef));
+
+  const dragHandle = document.createElement("button");
+  dragHandle.type = "button";
+  dragHandle.className = "pane-drag-handle";
+  dragHandle.title = "Drag to move pane";
+  dragHandle.innerHTML = paneDragIconSvg;
+  dragHandle.draggable = true;
+
+  actions.append(editBtn, dragHandle);
+  header.append(h2, actions);
+  pane.appendChild(header);
+
+  if (paneDef.type === "table") {
+    const tableWrap = document.createElement("div");
+    tableWrap.className = "table-wrap pane-table-wrap";
+    const table = document.createElement("table");
+    const thead = document.createElement("thead");
+    const headerRow = document.createElement("tr");
+    (paneDef.config?.columns || []).forEach((col) => {
+      const th = document.createElement("th");
+      th.textContent = col.label;
+      headerRow.appendChild(th);
+    });
+    thead.appendChild(headerRow);
+    const tbody = document.createElement("tbody");
+    tbody.id = `custom-pane-${paneDef.id}-body`;
+    tbody.innerHTML = '<tr><td colspan="99">Loading...</td></tr>';
+    table.append(thead, tbody);
+    tableWrap.appendChild(table);
+    pane.appendChild(tableWrap);
+  } else if (paneDef.type === "buttons") {
+    const btnGrid = document.createElement("div");
+    btnGrid.className = "custom-pane-buttons";
+    (paneDef.config?.buttons || []).forEach((btnDef) => {
+      const btn = document.createElement("button");
+      btn.textContent = btnDef.label;
+      if (btnDef.style === "danger") {
+        btn.className = "button-danger";
+      }
+      btn.addEventListener("click", () => runCustomScript(paneDef, btnDef));
+      btnGrid.appendChild(btn);
+    });
+    pane.appendChild(btnGrid);
+    const output = document.createElement("pre");
+    output.className = "custom-pane-output";
+    output.id = `custom-pane-${paneDef.id}-output`;
+    pane.appendChild(output);
+  }
+
+  return pane;
+}
+
+async function loadCustomTablePane(paneDef) {
+  const tbody = document.getElementById(`custom-pane-${paneDef.id}-body`);
+  if (!tbody) {
+    return;
+  }
+  try {
+    const response = await fetchJsonWithTimeout(paneDef.config.url, {
+      method: "GET",
+      mode: "cors",
+      cache: "no-store",
+      headers: { Accept: "application/json" }
+    }, 10000);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    let data = await response.json();
+    if (!Array.isArray(data)) {
+      data = data.items || data.data || data.packages || [];
+    }
+    tbody.innerHTML = "";
+    if (data.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="99">No data</td></tr>';
+      return;
+    }
+    data.forEach((item) => {
+      const row = document.createElement("tr");
+      (paneDef.config.columns || []).forEach((col) => {
+        if (col.link) {
+          row.appendChild(createExternalLinkCell(item[col.key]));
+        } else {
+          const td = document.createElement("td");
+          td.textContent = String(item[col.key] ?? "-");
+          row.appendChild(td);
+        }
+      });
+      tbody.appendChild(row);
+    });
+  } catch (error) {
+    tbody.innerHTML = `<tr><td colspan="99">Error: ${escapeHtml(error.message)}</td></tr>`;
+  }
+}
+
+async function runCustomScript(paneDef, btnDef) {
+  if (btnDef.confirm && !window.confirm(`Run "${btnDef.label}"?`)) {
+    return;
+  }
+  const outputEl = document.getElementById(`custom-pane-${paneDef.id}-output`);
+  if (outputEl) {
+    outputEl.textContent = `Running ${btnDef.label}...`;
+  }
+  try {
+    const result = await api("/api/run-script", {
+      method: "POST",
+      body: JSON.stringify({ script: btnDef.script, args: btnDef.args || [] })
+    });
+    if (outputEl) {
+      outputEl.textContent = result.stdout || result.stderr || "Done (no output)";
+    }
+  } catch (error) {
+    if (outputEl) {
+      outputEl.textContent = `Error: ${error.message}`;
+    }
+  }
+}
+
+function renderCustomPanes() {
+  dashboardGrid.querySelectorAll('.dashboard-pane[data-pane-id^="custom-"]').forEach((el) => el.remove());
+  Object.keys(customPaneTimers).forEach((id) => {
+    clearInterval(customPaneTimers[id]);
+    delete customPaneTimers[id];
+  });
+
+  const toolbar = document.querySelector("#add-pane-toolbar");
+  customPaneDefinitions.forEach((paneDef) => {
+    const paneEl = createCustomPaneElement(paneDef);
+    if (toolbar) {
+      dashboardGrid.insertBefore(paneEl, toolbar);
+    } else {
+      dashboardGrid.appendChild(paneEl);
+    }
+    const paneId = `custom-${paneDef.id}`;
+    if (!paneLayout[paneId]) {
+      paneLayout[paneId] = { col: 1, row: 100, colSpan: 6, rowSpan: 2 };
+    }
+    if (paneDef.type === "table" && !isPaneHidden(paneId)) {
+      loadCustomTablePane(paneDef);
+      const refreshMs = Math.max(5, paneDef.config?.refreshSeconds || 60) * 1000;
+      customPaneTimers[paneDef.id] = setInterval(() => {
+        if (!isPaneHidden(paneId)) {
+          loadCustomTablePane(paneDef);
+        }
+      }, refreshMs);
+    }
+  });
+
+  setupPaneCloseButtons();
+  setupPaneDragAndDrop();
+  setupPaneResizers();
+  reflowPaneLayout();
+  applyPaneLayout();
+}
+
 function updateAddPaneToolbar() {
   const toolbar = document.querySelector("#add-pane-toolbar");
   if (!toolbar) {
     return;
   }
-  const hiddenPaneIds = Object.keys(paneDefaultLayout).filter((id) => isPaneHidden(id));
-  if (hiddenPaneIds.length === 0) {
-    toolbar.style.display = "none";
-    toolbar.innerHTML = "";
-    return;
-  }
-  toolbar.style.display = "";
   toolbar.innerHTML = "";
-  const label = document.createElement("span");
-  label.className = "add-pane-label";
-  label.textContent = "Add pane:";
-  toolbar.appendChild(label);
-  hiddenPaneIds.forEach((paneId) => {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "add-pane-btn";
-    btn.textContent = `+ ${paneDisplayNames[paneId] || paneId}`;
-    btn.addEventListener("click", () => showPane(paneId));
-    toolbar.appendChild(btn);
+  toolbar.style.display = "";
+
+  const hiddenBuiltIn = Object.keys(paneDefaultLayout).filter((id) => isPaneHidden(id));
+  const hiddenCustom = customPaneDefinitions.filter((p) => isPaneHidden(`custom-${p.id}`));
+
+  if (hiddenBuiltIn.length > 0 || hiddenCustom.length > 0) {
+    const label = document.createElement("span");
+    label.className = "add-pane-label";
+    label.textContent = "Add pane:";
+    toolbar.appendChild(label);
+    hiddenBuiltIn.forEach((paneId) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "add-pane-btn";
+      btn.textContent = `+ ${paneDisplayNames[paneId] || paneId}`;
+      btn.addEventListener("click", () => showPane(paneId));
+      toolbar.appendChild(btn);
+    });
+    hiddenCustom.forEach((paneDef) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "add-pane-btn";
+      btn.textContent = `+ ${paneDef.title}`;
+      btn.addEventListener("click", () => showPane(`custom-${paneDef.id}`));
+      toolbar.appendChild(btn);
+    });
+  }
+
+  const createBtn = document.createElement("button");
+  createBtn.type = "button";
+  createBtn.className = "add-pane-btn add-pane-create-btn";
+  createBtn.textContent = "+ Custom Pane";
+  createBtn.addEventListener("click", () => openPaneEditor());
+  toolbar.appendChild(createBtn);
+}
+
+function createEditorRow(fields) {
+  const row = document.createElement("div");
+  row.className = "pane-editor-row";
+  fields.forEach((f) => {
+    if (f.type === "checkbox") {
+      const wrap = document.createElement("label");
+      wrap.className = "pane-editor-check";
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.name = f.name;
+      input.checked = f.value || false;
+      wrap.appendChild(input);
+      wrap.append(` ${f.label}`);
+      row.appendChild(wrap);
+    } else {
+      const label = document.createElement("label");
+      const input = document.createElement("input");
+      input.type = f.type || "text";
+      input.name = f.name;
+      input.value = f.value || "";
+      input.placeholder = f.placeholder || f.label;
+      label.textContent = f.label;
+      label.appendChild(input);
+      row.appendChild(label);
+    }
   });
+  const removeBtn = document.createElement("button");
+  removeBtn.type = "button";
+  removeBtn.className = "button-danger";
+  removeBtn.textContent = "X";
+  removeBtn.addEventListener("click", () => row.remove());
+  row.appendChild(removeBtn);
+  return row;
+}
+
+function openPaneEditor(existingDef = null) {
+  const overlay = document.createElement("div");
+  overlay.className = "pane-editor-overlay";
+
+  const editor = document.createElement("div");
+  editor.className = "pane-editor";
+
+  const title = document.createElement("h2");
+  title.textContent = existingDef ? "Edit Custom Pane" : "Create Custom Pane";
+  editor.appendChild(title);
+
+  const form = document.createElement("form");
+
+  const titleLabel = document.createElement("label");
+  titleLabel.textContent = "Title";
+  const titleInput = document.createElement("input");
+  titleInput.name = "title";
+  titleInput.required = true;
+  titleInput.value = existingDef?.title || "";
+  titleLabel.appendChild(titleInput);
+  form.appendChild(titleLabel);
+
+  const typeLabel = document.createElement("label");
+  typeLabel.textContent = "Type";
+  const typeSelect = document.createElement("select");
+  typeSelect.name = "type";
+  [{ value: "buttons", text: "Buttons (run scripts)" }, { value: "table", text: "Table (fetch data)" }].forEach((opt) => {
+    const option = document.createElement("option");
+    option.value = opt.value;
+    option.textContent = opt.text;
+    if (existingDef?.type === opt.value) {
+      option.selected = true;
+    }
+    typeSelect.appendChild(option);
+  });
+  typeLabel.appendChild(typeSelect);
+  form.appendChild(typeLabel);
+
+  const tableSection = document.createElement("div");
+  tableSection.id = "editor-table-section";
+
+  const urlLabel = document.createElement("label");
+  urlLabel.textContent = "Data URL";
+  const urlInput = document.createElement("input");
+  urlInput.name = "url";
+  urlInput.type = "url";
+  urlInput.value = existingDef?.config?.url || "";
+  urlLabel.appendChild(urlInput);
+  tableSection.appendChild(urlLabel);
+
+  const refreshLabel = document.createElement("label");
+  refreshLabel.textContent = "Refresh interval (seconds)";
+  const refreshInput = document.createElement("input");
+  refreshInput.name = "refreshSeconds";
+  refreshInput.type = "number";
+  refreshInput.min = "5";
+  refreshInput.value = existingDef?.config?.refreshSeconds || "60";
+  refreshLabel.appendChild(refreshInput);
+  tableSection.appendChild(refreshLabel);
+
+  const colsHeader = document.createElement("h3");
+  colsHeader.textContent = "Columns";
+  tableSection.appendChild(colsHeader);
+
+  const colsContainer = document.createElement("div");
+  colsContainer.id = "editor-columns";
+  (existingDef?.type === "table" && existingDef?.config?.columns || []).forEach((col) => {
+    colsContainer.appendChild(createEditorRow([
+      { name: "col-key", label: "Key", value: col.key },
+      { name: "col-label", label: "Label", value: col.label },
+      { name: "col-link", label: "Link", type: "checkbox", value: col.link }
+    ]));
+  });
+  tableSection.appendChild(colsContainer);
+
+  const addColBtn = document.createElement("button");
+  addColBtn.type = "button";
+  addColBtn.textContent = "+ Add Column";
+  addColBtn.addEventListener("click", () => {
+    colsContainer.appendChild(createEditorRow([
+      { name: "col-key", label: "Key" },
+      { name: "col-label", label: "Label" },
+      { name: "col-link", label: "Link", type: "checkbox" }
+    ]));
+  });
+  tableSection.appendChild(addColBtn);
+  form.appendChild(tableSection);
+
+  const buttonsSection = document.createElement("div");
+  buttonsSection.id = "editor-buttons-section";
+
+  const btnsHeader = document.createElement("h3");
+  btnsHeader.textContent = "Buttons";
+  buttonsSection.appendChild(btnsHeader);
+
+  const btnsContainer = document.createElement("div");
+  btnsContainer.id = "editor-buttons";
+  (existingDef?.type === "buttons" && existingDef?.config?.buttons || []).forEach((b) => {
+    btnsContainer.appendChild(createEditorRow([
+      { name: "btn-label", label: "Label", value: b.label },
+      { name: "btn-script", label: "Script", value: b.script },
+      { name: "btn-confirm", label: "Confirm", type: "checkbox", value: b.confirm }
+    ]));
+  });
+  buttonsSection.appendChild(btnsContainer);
+
+  const addBtnBtn = document.createElement("button");
+  addBtnBtn.type = "button";
+  addBtnBtn.textContent = "+ Add Button";
+  addBtnBtn.addEventListener("click", () => {
+    btnsContainer.appendChild(createEditorRow([
+      { name: "btn-label", label: "Label" },
+      { name: "btn-script", label: "Script" },
+      { name: "btn-confirm", label: "Confirm", type: "checkbox" }
+    ]));
+  });
+  buttonsSection.appendChild(addBtnBtn);
+  form.appendChild(buttonsSection);
+
+  function updateSections() {
+    const isTable = typeSelect.value === "table";
+    tableSection.style.display = isTable ? "" : "none";
+    buttonsSection.style.display = isTable ? "none" : "";
+  }
+  typeSelect.addEventListener("change", updateSections);
+  updateSections();
+
+  const actionsDiv = document.createElement("div");
+  actionsDiv.className = "pane-editor-actions";
+
+  if (existingDef) {
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "button-danger";
+    deleteBtn.textContent = "Delete Pane";
+    deleteBtn.addEventListener("click", async () => {
+      if (!window.confirm(`Delete "${existingDef.title}"?`)) {
+        return;
+      }
+      try {
+        await api(`/api/custom-panes/${existingDef.id}`, { method: "DELETE" });
+        const paneId = `custom-${existingDef.id}`;
+        delete paneLayout[paneId];
+        await loadCustomPaneDefinitions();
+        renderCustomPanes();
+        updateAddPaneToolbar();
+        savePaneLayout().catch(() => {});
+      } catch (error) {
+        alert(`Failed to delete: ${error.message}`);
+      }
+      overlay.remove();
+    });
+    actionsDiv.appendChild(deleteBtn);
+  }
+
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.addEventListener("click", () => overlay.remove());
+  actionsDiv.appendChild(cancelBtn);
+
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "submit";
+  saveBtn.textContent = "Save";
+  actionsDiv.appendChild(saveBtn);
+  form.appendChild(actionsDiv);
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const paneData = {
+      title: titleInput.value.trim(),
+      type: typeSelect.value,
+      config: {}
+    };
+
+    if (paneData.type === "table") {
+      paneData.config.url = urlInput.value.trim();
+      paneData.config.refreshSeconds = Number(refreshInput.value) || 60;
+      paneData.config.columns = [];
+      colsContainer.querySelectorAll(".pane-editor-row").forEach((row) => {
+        const key = row.querySelector('[name="col-key"]')?.value?.trim();
+        const label = row.querySelector('[name="col-label"]')?.value?.trim();
+        const link = row.querySelector('[name="col-link"]')?.checked || false;
+        if (key) {
+          paneData.config.columns.push({ key, label: label || key, link });
+        }
+      });
+    } else {
+      paneData.config.buttons = [];
+      btnsContainer.querySelectorAll(".pane-editor-row").forEach((row) => {
+        const label = row.querySelector('[name="btn-label"]')?.value?.trim();
+        const script = row.querySelector('[name="btn-script"]')?.value?.trim();
+        const confirm = row.querySelector('[name="btn-confirm"]')?.checked || false;
+        if (label && script) {
+          paneData.config.buttons.push({ label, script, confirm });
+        }
+      });
+    }
+
+    try {
+      if (existingDef) {
+        await api(`/api/custom-panes/${existingDef.id}`, {
+          method: "PUT",
+          body: JSON.stringify(paneData)
+        });
+      } else {
+        await api("/api/custom-panes", {
+          method: "POST",
+          body: JSON.stringify(paneData)
+        });
+      }
+      await loadCustomPaneDefinitions();
+      renderCustomPanes();
+      updateAddPaneToolbar();
+      savePaneLayout().catch(() => {});
+    } catch (error) {
+      alert(`Failed to save: ${error.message}`);
+    }
+    overlay.remove();
+  });
+
+  editor.appendChild(form);
+  overlay.appendChild(editor);
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) {
+      overlay.remove();
+    }
+  });
+  document.body.appendChild(overlay);
 }
 
 async function initializePaneLayout() {
   paneLayout = await loadPaneLayout();
+  await loadCustomPaneDefinitions();
+  renderCustomPanes();
   reflowPaneLayout();
   applyPaneLayout();
   setupPaneCloseButtons();
