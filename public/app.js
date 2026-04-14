@@ -15,6 +15,7 @@ let eventsSocket = null;
 let logsSocket = null;
 let activeResizeState = null;
 let activeDragState = null;
+let isPaneDragDropBound = false;
 const paneRevealTimers = new WeakMap();
 let lastActivityTime = Date.now();
 let sessionTtlMs = 30 * 60 * 1000;
@@ -489,6 +490,16 @@ function removeDragGhost() {
   if (activeDragState?.ghostElement?.isConnected) {
     activeDragState.ghostElement.remove();
   }
+  dashboardGrid.querySelectorAll(".pane-drop-ghost").forEach((ghost) => ghost.remove());
+}
+
+function resetDragVisualState() {
+  dashboardGrid.classList.remove("is-dragging-layout");
+  removeDragGhost();
+  dashboardGrid.querySelectorAll(".dashboard-pane").forEach((pane) => {
+    pane.classList.remove("dragging", "drop-target");
+  });
+  activeDragState = null;
 }
 
 function updateDragGhostPosition(clientX, clientY) {
@@ -522,8 +533,13 @@ function setupPaneDragAndDrop() {
   let draggingPaneId = null;
 
   dashboardGrid.querySelectorAll(".pane-drag-handle").forEach((handle) => {
+    if (handle.dataset.dragBound === "true") {
+      return;
+    }
+    handle.dataset.dragBound = "true";
     handle.draggable = true;
     handle.addEventListener("dragstart", (event) => {
+      resetDragVisualState();
       const pane = event.currentTarget.closest(".dashboard-pane");
       draggingPaneId = pane?.dataset.paneId || null;
       if (!draggingPaneId || !event.dataTransfer) {
@@ -549,14 +565,14 @@ function setupPaneDragAndDrop() {
     });
     handle.addEventListener("dragend", () => {
       draggingPaneId = null;
-      dashboardGrid.classList.remove("is-dragging-layout");
-      removeDragGhost();
-      activeDragState = null;
-      dashboardGrid.querySelectorAll(".dashboard-pane").forEach((pane) => {
-        pane.classList.remove("dragging", "drop-target");
-      });
+      resetDragVisualState();
     });
   });
+
+  if (isPaneDragDropBound) {
+    return;
+  }
+  isPaneDragDropBound = true;
 
   dashboardGrid.addEventListener("dragover", (event) => {
     if (!draggingPaneId) {
@@ -575,12 +591,13 @@ function setupPaneDragAndDrop() {
     const col = activeDragState?.col;
     const row = activeDragState?.row;
     if (!Number.isFinite(col) || !Number.isFinite(row)) {
+      resetDragVisualState();
+      draggingPaneId = null;
       return;
     }
     movePaneToGridPosition(draggingPaneId, col, row);
-    dashboardGrid.classList.remove("is-dragging-layout");
-    removeDragGhost();
-    activeDragState = null;
+    resetDragVisualState();
+    draggingPaneId = null;
   });
 }
 
