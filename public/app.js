@@ -21,6 +21,7 @@ let lastActivityTime = Date.now();
 let sessionTtlMs = 30 * 60 * 1000;
 let inactivityCheckTimer = null;
 let isSessionExpired = false;
+let authConfig = { authMode: "password", sessionTtlMinutes: 30, logoutUrl: null };
 let customPaneDefinitions = [];
 const customPaneTimers = {};
 
@@ -53,7 +54,14 @@ function escapeHtml(str) {
 
 function getCsrfToken() {
   const match = document.cookie.match(/(?:^|;\s*)dd_csrf=([^;]*)/);
-  return match ? decodeURIComponent(match[1]) : "";
+  if (!match) {
+    return "";
+  }
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
 }
 
 function resetActivityTimer() {
@@ -94,10 +102,24 @@ function handleSessionExpired() {
   isSessionExpired = true;
   stopAllTimers();
   disconnectAllSockets();
+  if (authConfig.authMode === "authelia") {
+    window.location.href = "/";
+    return;
+  }
   window.location.href = "/login";
 }
 
 async function logout() {
+  if (authConfig.authMode === "authelia") {
+    if (authConfig.logoutUrl) {
+      window.location.href = authConfig.logoutUrl;
+      return;
+    }
+    stopAllTimers();
+    disconnectAllSockets();
+    window.location.href = "/";
+    return;
+  }
   try {
     await fetch("/auth/logout", { method: "POST" });
   } catch {
@@ -108,15 +130,18 @@ async function logout() {
   window.location.href = "/login";
 }
 
-async function loadSessionTtl() {
+async function loadAuthConfig() {
   try {
-    const response = await fetch("/api/session/info");
+    const response = await fetch("/api/auth/config");
     if (response.ok) {
       const data = await response.json();
-      sessionTtlMs = data.ttlMinutes * 60 * 1000;
+      authConfig = data;
+      if (data.sessionTtlMinutes != null) {
+        sessionTtlMs = data.sessionTtlMinutes * 60 * 1000;
+      }
     }
   } catch {
-    // use default
+    // use defaults
   }
 }
 
@@ -1448,7 +1473,11 @@ function createExternalLinkCell(value) {
 async function api(path, options = {}) {
   const headers = { "Content-Type": "application/json", ...options.headers };
   const method = (options.method || "GET").toUpperCase();
-  if (method !== "GET" && method !== "HEAD") {
+  if (
+    authConfig.authMode === "password" &&
+    method !== "GET" &&
+    method !== "HEAD"
+  ) {
     headers["X-CSRF-Token"] = getCsrfToken();
   }
   const response = await fetch(path, {
@@ -1809,8 +1838,10 @@ closeLogsBtn.addEventListener("click", () => {
 
 document.querySelector("#logout-btn").addEventListener("click", logout);
 
-loadSessionTtl().then(() => {
-  startInactivityCheck();
+loadAuthConfig().then(() => {
+  if (authConfig.authMode === "password") {
+    startInactivityCheck();
+  }
 });
 
 if ("serviceWorker" in navigator) {

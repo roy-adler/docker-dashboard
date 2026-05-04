@@ -37,9 +37,17 @@ app.use(helmet({
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: false }));
 
+const authMode = String(process.env.AUTH_MODE || "password").toLowerCase();
+const isAutheliaMode = authMode === "authelia";
+const remoteUserHeaderName = String(
+  process.env.REMOTE_USER_HEADER || "Remote-User"
+).toLowerCase();
+
 const dashboardPassword = process.env.DASHBOARD_PASSWORD;
-if (!dashboardPassword) {
-  console.error("Missing DASHBOARD_PASSWORD environment variable.");
+if (!isAutheliaMode && !dashboardPassword) {
+  console.error(
+    "Missing DASHBOARD_PASSWORD (or set AUTH_MODE=authelia for forward-auth behind Authelia)."
+  );
   process.exit(1);
 }
 
@@ -48,9 +56,9 @@ const csrfCookieName = "dd_csrf";
 const rememberCookieName = "dd_remember";
 const sessionTtlMinutes = Math.max(1, Number(process.env.AUTH_SESSION_TTL_MINUTES || 30));
 const rememberTtlDays = Math.max(1, Number(process.env.AUTH_REMEMBER_TTL_DAYS || 30));
-const sessionSecret = process.env.AUTH_SESSION_SECRET || dashboardPassword;
+const sessionSecret = isAutheliaMode ? "" : (process.env.AUTH_SESSION_SECRET || dashboardPassword);
 
-if (!process.env.AUTH_SESSION_SECRET) {
+if (!isAutheliaMode && !process.env.AUTH_SESSION_SECRET) {
   console.warn(
     "Warning: AUTH_SESSION_SECRET not set, falling back to DASHBOARD_PASSWORD for session signing. " +
     "Set a separate AUTH_SESSION_SECRET for better security."
@@ -127,13 +135,24 @@ function formatDockerError(error) {
   return { error: message };
 }
 
+function decodeCookieValue(raw) {
+  if (raw === undefined || raw === "") {
+    return "";
+  }
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
 function parseCookies(cookieHeader = "") {
   return cookieHeader.split(";").reduce((acc, pair) => {
     const [rawKey, ...rawValue] = pair.trim().split("=");
     if (!rawKey) {
       return acc;
     }
-    acc[rawKey] = decodeURIComponent(rawValue.join("="));
+    acc[rawKey] = decodeCookieValue(rawValue.join("="));
     return acc;
   }, {});
 }
@@ -203,6 +222,17 @@ function isValidRememberToken(token) {
 function isAuthenticatedFromCookieHeader(cookieHeader) {
   const cookies = parseCookies(cookieHeader);
   return isValidSessionToken(cookies[sessionCookieName]);
+}
+
+function isAuthenticated(req) {
+  if (isAutheliaMode) {
+    return String(req.headers[remoteUserHeaderName] || "").trim() !== "";
+  }
+  if (isAuthenticatedFromCookieHeader(req.headers.cookie)) {
+    return true;
+  }
+  const cookies = parseCookies(req.headers.cookie);
+  return isValidRememberToken(cookies[rememberCookieName]);
 }
 
 function generateCsrfToken() {
@@ -478,72 +508,96 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-app.get("/login", (req, res) => {
-  if (isAuthenticatedFromCookieHeader(req.headers.cookie)) {
+app.get("/api/auth/config", (_req, res) => {
+  res.json({
+    authMode: isAutheliaMode ? "authelia" : "password",
+    sessionTtlMinutes: isAutheliaMode ? null : sessionTtlMinutes,
+    logoutUrl: isAutheliaMode ? (process.env.AUTHELIA_LOGOUT_URL || null) : null
+  });
+});
+
+if (isAutheliaMode) {
+  app.get("/login", (_req, res) => {
     res.redirect("/");
-    return;
-  }
-  const cookies = parseCookies(req.headers.cookie);
-  if (isValidRememberToken(cookies[rememberCookieName])) {
+  });
+  app.post("/auth/login", (_req, res) => {
+    res.redirect("/");
+  });
+  app.post("/auth/logout", (_req, res) => {
+    res.status(204).end();
+  });
+} else {
+  app.get("/login", (req, res) => {
+    if (isAuthenticated(req)) {
+      res.redirect("/");
+      return;
+    }
+    const hasError = req.query.error === "1";
+    res.type("html").send(renderLoginPage(hasError));
+  });
+
+  app.post("/auth/login", loginLimiter, (req, res) => {
+    const submittedPassword = String(req.body?.password || "");
+    if (!timingSafeEqual(submittedPassword, dashboardPassword)) {
+      res.redirect("/login?error=1");
+      return;
+    }
     setSessionCookie(res, req);
+    const wantRemember = req.body?.remember === "1";
+    if (wantRemember) {
+      const existing = res.getHeader("Set-Cookie") || [];
+      const rememberPart = setRememberCookie(res, req);
+      res.setHeader("Set-Cookie", [...(Array.isArray(existing) ? existing : [existing]), rememberPart]);
+    }
     res.redirect("/");
-    return;
-  }
-  const hasError = req.query.error === "1";
-  res.type("html").send(renderLoginPage(hasError));
-});
+  });
 
-app.post("/auth/login", loginLimiter, (req, res) => {
-  const submittedPassword = String(req.body?.password || "");
-  if (!timingSafeEqual(submittedPassword, dashboardPassword)) {
-    res.redirect("/login?error=1");
-    return;
-  }
-  setSessionCookie(res, req);
-  const wantRemember = req.body?.remember === "1";
-  if (wantRemember) {
-    const existing = res.getHeader("Set-Cookie") || [];
-    const rememberPart = setRememberCookie(res, req);
-    res.setHeader("Set-Cookie", [...(Array.isArray(existing) ? existing : [existing]), rememberPart]);
-  }
-  res.redirect("/");
-});
-
-app.post("/auth/logout", (_req, res) => {
-  clearSessionCookie(res);
-  res.status(204).end();
-});
+  app.post("/auth/logout", (_req, res) => {
+    clearSessionCookie(res);
+    res.status(204).end();
+  });
+}
 
 app.get("/favicon.svg", (_req, res) => {
   res.type("image/svg+xml").sendFile(dashboardFaviconPath);
 });
 
 app.get("/api/session/info", (req, res) => {
-  if (!isAuthenticatedFromCookieHeader(req.headers.cookie)) {
+  if (!isAuthenticated(req)) {
     res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  if (isAutheliaMode) {
+    res.json({ authMode: "authelia" });
     return;
   }
   res.json({ ttlMinutes: sessionTtlMinutes });
 });
 
 app.use((req, res, next) => {
-  const publicPaths = ["/login", "/auth/login", "/api/health", "/api/session/info",
-    "/manifest.json", "/sw.js", "/icon-192.png", "/icon-512.png",
-    "/docker-dashboard.svg", "/docker-dashboard.png", "/favicon.svg"];
+  const publicPaths = [
+    "/api/auth/config",
+    "/api/health",
+    "/manifest.json",
+    "/sw.js",
+    "/icon-192.png",
+    "/icon-512.png",
+    "/docker-dashboard.svg",
+    "/docker-dashboard.png",
+    "/favicon.svg"
+  ];
+  if (!isAutheliaMode) {
+    publicPaths.push("/login", "/auth/login", "/api/session/info");
+  }
   if (publicPaths.includes(req.path)) {
     next();
     return;
   }
 
-  if (isAuthenticatedFromCookieHeader(req.headers.cookie)) {
-    refreshSessionCookie(res, req);
-    next();
-    return;
-  }
-
-  const cookies = parseCookies(req.headers.cookie);
-  if (isValidRememberToken(cookies[rememberCookieName])) {
-    setSessionCookie(res, req);
+  if (isAuthenticated(req)) {
+    if (!isAutheliaMode) {
+      refreshSessionCookie(res, req);
+    }
     next();
     return;
   }
@@ -552,10 +606,24 @@ app.use((req, res, next) => {
     res.status(401).json({ error: "Unauthorized" });
     return;
   }
+  if (isAutheliaMode) {
+    res
+      .status(401)
+      .type("text/plain")
+      .send(
+        "Unauthorized: missing trusted user header. " +
+        "Ensure Authelia (or your reverse proxy) forwards Remote-User to this app."
+      );
+    return;
+  }
   res.redirect("/login");
 });
 
 app.use((req, res, next) => {
+  if (isAutheliaMode) {
+    next();
+    return;
+  }
   const method = req.method;
   if (method === "GET" || method === "HEAD" || method === "OPTIONS") {
     next();
@@ -988,7 +1056,7 @@ server.on("upgrade", (request, socket, head) => {
     socket.destroy();
     return;
   }
-  if (!isAuthenticatedFromCookieHeader(request.headers.cookie)) {
+  if (!isAuthenticated(request)) {
     socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
     socket.destroy();
     return;

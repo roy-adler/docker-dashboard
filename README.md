@@ -12,16 +12,24 @@ Simple Docker dashboard app that talks directly to the Docker daemon.
 
 ## Run with Docker Compose
 
+**Behind Authelia (recommended):** the app trusts the `Remote-User` header from your reverse proxy after Authelia forward-auth. Do not expose the container directly to untrusted networks.
+
+```bash
+AUTH_MODE=authelia docker compose up --build
+```
+
+Optional:
+
+- `REMOTE_USER_HEADER` — header to read (default: `Remote-User`, matching Authelia)
+- `AUTHELIA_LOGOUT_URL` — URL for the dashboard **Logout** button (your Authelia portal sign-out URL)
+
+**Standalone password auth (legacy):**
+
 ```bash
 DASHBOARD_PASSWORD="your-strong-password" docker compose up --build
 ```
 
-Or put it in a `.env` file:
-
-```bash
-DASHBOARD_PASSWORD=your-strong-password
-docker compose up --build
-```
+Or put variables in a `.env` file, then `docker compose up --build`.
 
 Open: [http://localhost:3000](http://localhost:3000)
 
@@ -29,6 +37,8 @@ Open: [http://localhost:3000](http://localhost:3000)
 
 ```bash
 npm install
+AUTH_MODE=authelia npm start
+# or
 DASHBOARD_PASSWORD=your-strong-password AUTH_SESSION_TTL_MINUTES=30 npm start
 ```
 
@@ -46,4 +56,4 @@ DASHBOARD_PASSWORD=your-strong-password AUTH_SESSION_TTL_MINUTES=30 npm start
 
 ## Security note
 
-This app requires access to Docker socket (`/var/run/docker.sock`), which effectively gives host-level Docker control. Restrict network access and add authentication before exposing beyond trusted environments.
+This app requires access to Docker socket (`/var/run/docker.sock`), which effectively gives host-level Docker control. Restrict network access. With `AUTH_MODE=authelia`, only place the dashboard behind Authelia and a reverse proxy that strips or overwrites `Remote-User` from client requests (normal forward-auth setup).
